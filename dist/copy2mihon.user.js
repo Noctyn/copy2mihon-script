@@ -11,6 +11,7 @@
 // @match        *://*.copymanga.site/*
 // @match        *://*.copymanga.org/*
 // @match        *://*.copymanga.com/*
+// @require      https://cdn.jsdelivr.net/npm/long@5.2.3/dist/long.js
 // @require      https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js
 // @require      https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js
 // @grant        GM_download
@@ -105,6 +106,10 @@
 
   function initProtobuf() {
     if (!protobufRoot && window.protobuf) {
+      if (window.Long && window.protobuf.util) {
+        window.protobuf.util.Long = window.Long;
+        window.protobuf.configure();
+      }
       protobufRoot = window.protobuf.parse(PROTO_DEFINITION).root;
       BackupType = protobufRoot.lookupType("Backup");
     }
@@ -115,8 +120,14 @@
     if (window.protobuf && window.protobuf.util && window.protobuf.util.Long) {
       return window.protobuf.util.Long.fromString(String(idStr));
     }
+    if (window.Long && typeof window.Long.fromString === 'function') {
+      return window.Long.fromString(String(idStr));
+    }
     try {
-      return BigInt(idStr);
+      const bi = BigInt(idStr);
+      const low = Number(BigInt.asIntN(32, bi));
+      const high = Number(BigInt.asIntN(32, bi >> 32n));
+      return { low, high, unsigned: false };
     } catch (_) {
       return idStr;
     }
