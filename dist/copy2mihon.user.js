@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.5
+// @version      0.3.6
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -703,10 +703,7 @@
           m.favorite = true;
           stats.updated_favorites++;
         }
-        if (targetCatOrder !== null && !(m.categories || []).includes(targetCatOrder)) {
-          m.categories = m.categories || [];
-          m.categories.push(targetCatOrder);
-        }
+        // Preserve user's existing category assignment for manga already in Mihon
       } else {
         const { title, author, cover, status } = deriveComicFields(comic);
         const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
