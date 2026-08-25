@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.3
+// @version      0.3.4
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -1273,20 +1273,10 @@
         const exportBtn = document.createElement('button');
         exportBtn.className = 'c2m-person-btn';
         exportBtn.innerHTML = '📦 导出 Mihon 备份';
-        exportBtn.title = '一键导出拷贝漫画书架订阅与阅读历史至 Mihon';
+        exportBtn.title = '一键导出或合并拷贝漫画备份至 Mihon';
         exportBtn.addEventListener('click', openModal);
 
-        const mergeBtn = document.createElement('button');
-        mergeBtn.className = 'c2m-person-btn c2m-person-btn-sub';
-        mergeBtn.innerHTML = '🔄 合并本地备份';
-        mergeBtn.title = '选择本地 .tachibk 备份文件并增量合并最新云端数据';
-        mergeBtn.addEventListener('click', () => {
-          openModal();
-          UI.fileInput.click();
-        });
-
         actionSection.appendChild(exportBtn);
-        actionSection.appendChild(mergeBtn);
         infoContainer.appendChild(actionSection);
       }
     }
@@ -1327,16 +1317,6 @@
       li.style.alignItems = 'center';
       li.appendChild(btn);
       navContainer.appendChild(li);
-    }
-  }
-
-  function updateTokenDisplay() {
-    if (!UI.tokenStatus) return;
-    const token = detectedToken || detectTokenFromStorage();
-    if (token) {
-      UI.tokenStatus.innerHTML = `<span class="c2m-token-green">● Token 已就绪 (${token.slice(0, 6)}...${token.slice(-4)})</span>`;
-    } else {
-      UI.tokenStatus.innerHTML = `<span class="c2m-token-red">● 未检测到 Token (请确认已登录)</span>`;
     }
   }
 
