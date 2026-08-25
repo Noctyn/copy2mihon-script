@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.0
+// @version      0.3.1
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -920,6 +920,50 @@
         box-shadow: 0 3px 10px rgba(0, 132, 255, 0.4);
       }
 
+      /* Personal Center Header Actions (Red box area below registration date) */
+      .c2m-person-header-actions {
+        margin-top: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .c2m-person-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 14px;
+        font-size: 12.5px;
+        font-weight: 500;
+        color: #ffffff !important;
+        background: rgba(255, 255, 255, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-decoration: none;
+        user-select: none;
+        line-height: 20px;
+        backdrop-filter: blur(4px);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+      }
+      .c2m-person-btn:hover {
+        background: #ffffff;
+        color: #1790e6 !important;
+        border-color: #ffffff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+      }
+      .c2m-person-btn-sub {
+        background: rgba(255, 255, 255, 0.14);
+        border-color: rgba(255, 255, 255, 0.4);
+      }
+      .c2m-person-btn-sub:hover {
+        background: #ffffff;
+        color: #059669 !important;
+        border-color: #ffffff;
+      }
+
       /* Modal Overlay */
       #c2m-modal-overlay {
         position: fixed;
@@ -1283,9 +1327,37 @@
 
   // Inject buttons into native CopyManga navbar and personal center
   function injectNativePageButtons() {
-    if (document.getElementById('c2m-nav-injected-btn')) return;
+    // 1. Personal Center Header Banner (https://www.mangacopy.com/web/person/*)
+    const personHeader = document.querySelector('header, .el-header');
+    if (personHeader && !document.getElementById('c2m-person-header-actions')) {
+      const infoContainer = personHeader.querySelector('div');
+      if (infoContainer && (infoContainer.querySelector('.vavtar') || infoContainer.querySelector('section'))) {
+        const actionSection = document.createElement('section');
+        actionSection.id = 'c2m-person-header-actions';
+        actionSection.className = 'c2m-person-header-actions';
 
-    // 1. Try injecting into Top Navbar
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'c2m-person-btn';
+        exportBtn.innerHTML = '📦 导出 Mihon 备份';
+        exportBtn.title = '一键导出拷贝漫画书架订阅与阅读历史至 Mihon';
+        exportBtn.addEventListener('click', openModal);
+
+        const mergeBtn = document.createElement('button');
+        mergeBtn.className = 'c2m-person-btn c2m-person-btn-sub';
+        mergeBtn.innerHTML = '🔄 合并本地备份';
+        mergeBtn.title = '选择本地 .tachibk 备份文件并增量合并最新云端数据';
+        mergeBtn.addEventListener('click', () => {
+          openModal();
+          UI.fileInput.click();
+        });
+
+        actionSection.appendChild(exportBtn);
+        actionSection.appendChild(mergeBtn);
+        infoContainer.appendChild(actionSection);
+      }
+    }
+
+    // 2. Main Site Top Navbar (Home, Comic detail, etc.)
     const navTargets = [
       '.nav-list',
       '.header-content ul',
@@ -1306,7 +1378,7 @@
       }
     }
 
-    if (navContainer) {
+    if (navContainer && !document.getElementById('c2m-nav-injected-btn')) {
       const btn = document.createElement('a');
       btn.id = 'c2m-nav-injected-btn';
       btn.className = 'c2m-native-nav-btn';
@@ -1316,46 +1388,11 @@
       btn.addEventListener('click', openModal);
 
       const li = document.createElement('li');
+      li.id = 'c2m-nav-li';
       li.style.display = 'inline-flex';
       li.style.alignItems = 'center';
       li.appendChild(btn);
       navContainer.appendChild(li);
-    } else {
-      // Fallback clean top header link
-      const fallbackBtn = document.createElement('div');
-      fallbackBtn.id = 'c2m-nav-injected-btn';
-      fallbackBtn.className = 'c2m-native-nav-btn';
-      fallbackBtn.style.position = 'fixed';
-      fallbackBtn.style.top = '12px';
-      fallbackBtn.style.right = '120px';
-      fallbackBtn.style.zIndex = '99999';
-      fallbackBtn.innerHTML = '📦 导出 Mihon';
-      fallbackBtn.addEventListener('click', openModal);
-      document.body.appendChild(fallbackBtn);
-    }
-
-    // 2. Try injecting into Personal Center / Bookshelf Toolbar
-    const bookshelfTargets = [
-      '.person-nav',
-      '.person-header',
-      '.tab-list',
-      '.classify',
-      '.table-action',
-      '.bookshelf-toolbar',
-      '.shujia-header'
-    ];
-
-    for (const sel of bookshelfTargets) {
-      const bsEl = document.querySelector(sel);
-      if (bsEl && !document.getElementById('c2m-bookshelf-injected-btn')) {
-        const bsBtn = document.createElement('button');
-        bsBtn.id = 'c2m-bookshelf-injected-btn';
-        bsBtn.className = 'c2m-bookshelf-btn';
-        bsBtn.innerHTML = '📦 导出到 Mihon 备份';
-        bsBtn.addEventListener('click', openModal);
-        bsEl.appendChild(bsBtn);
-        break;
-      }
     }
   }
 
@@ -1501,6 +1538,7 @@
 
   function onInit() {
     createUI();
+
     // Periodic Token Check on startup (in case storage or cookies took a moment to populate)
     let pollCount = 0;
     const pollInterval = setInterval(() => {
@@ -1510,8 +1548,22 @@
         updateTokenDisplay();
         if (pollCount > 3) clearInterval(pollInterval);
       }
-      if (pollCount >= 10) clearInterval(pollInterval);
+      injectNativePageButtons();
+      if (pollCount >= 15) clearInterval(pollInterval);
     }, 1000);
+
+    // MutationObserver to watch for Vue router page changes and inject buttons dynamically
+    let debounceTimer = null;
+    const observer = new MutationObserver(() => {
+      if (debounceTimer) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        injectNativePageButtons();
+        detectTokenFromStorage();
+        updateTokenDisplay();
+      }, 200);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
