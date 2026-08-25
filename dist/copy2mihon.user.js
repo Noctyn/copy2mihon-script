@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.4
+// @version      0.3.5
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -1174,24 +1174,24 @@
     overlay.innerHTML = `
       <div id="c2m-modal-card">
         <div class="c2m-modal-header">
-          <div class="c2m-modal-title">导出至 Mihon 备份</div>
+          <div class="c2m-modal-title">导出到 Mihon</div>
           <button type="button" class="c2m-close-btn" id="c2m-close-modal">✕</button>
         </div>
         <div class="c2m-modal-body">
           <div class="c2m-btn-grid">
             <button class="c2m-btn c2m-btn-main c2m-btn-full" id="c2m-export-all">
-              ⚡ 一键导出全部 (书架 + 历史)
+              导出完整备份 (书架与历史)
             </button>
-            <button class="c2m-btn c2m-btn-sub" id="c2m-export-subs">📚 仅书架订阅</button>
-            <button class="c2m-btn c2m-btn-sub" id="c2m-export-hist">🕒 仅阅读历史</button>
+            <button class="c2m-btn c2m-btn-sub" id="c2m-export-subs">仅导出书架</button>
+            <button class="c2m-btn c2m-btn-sub" id="c2m-export-hist">仅导出历史</button>
             <button class="c2m-btn c2m-btn-emerald c2m-btn-full" id="c2m-merge-btn">
-              🔄 合并至本地 .tachibk 备份
+              合并到本地备份 (.tachibk)
             </button>
           </div>
           <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
 
           <div class="c2m-opt-row">
-            <span>Mihon 分类名称:</span>
+            <span>分类名称:</span>
             <input type="text" class="c2m-text-input" id="c2m-category-input" value="拷贝漫画" />
           </div>
 
@@ -1247,9 +1247,9 @@
 
     // Register Native Menu Commands in Tampermonkey
     if (typeof GM_registerMenuCommand === 'function') {
-      GM_registerMenuCommand("📦 打开 copy2mihon 导出面板", openModal);
-      GM_registerMenuCommand("⚡ 一键导出完整备份", () => { openModal(); runExportPipeline(true, true); });
-      GM_registerMenuCommand("🔄 合并本地 .tachibk 备份", () => { openModal(); UI.fileInput.click(); });
+      GM_registerMenuCommand("打开导出面板", openModal);
+      GM_registerMenuCommand("导出完整备份", () => { openModal(); runExportPipeline(true, true); });
+      GM_registerMenuCommand("合并本地备份", () => { openModal(); UI.fileInput.click(); });
     }
 
     // Try injecting native buttons into page navbar and bookshelf
@@ -1272,8 +1272,8 @@
 
         const exportBtn = document.createElement('button');
         exportBtn.className = 'c2m-person-btn';
-        exportBtn.innerHTML = '📦 导出 Mihon 备份';
-        exportBtn.title = '一键导出或合并拷贝漫画备份至 Mihon';
+        exportBtn.innerHTML = '导出到 Mihon';
+        exportBtn.title = '导出书架与历史记录至 Mihon 备份';
         exportBtn.addEventListener('click', openModal);
 
         actionSection.appendChild(exportBtn);
@@ -1307,8 +1307,8 @@
       btn.id = 'c2m-nav-injected-btn';
       btn.className = 'c2m-native-nav-btn';
       btn.href = 'javascript:void(0);';
-      btn.innerHTML = '📦 导出 Mihon';
-      btn.title = '一键导出或合并拷贝漫画备份至 Mihon';
+      btn.innerHTML = '导出到 Mihon';
+      btn.title = '导出书架与历史记录至 Mihon 备份';
       btn.addEventListener('click', openModal);
 
       const li = document.createElement('li');
@@ -1346,7 +1346,7 @@
   async function runExportPipeline(includeSubs, includeHist) {
     const token = detectedToken || detectTokenFromStorage();
     if (!token) {
-      alert("未检测到登录信息，请先在当前网站登录账号后再导出！");
+      alert("未检测到登录信息，请先在当前网站登录账号后再导出。");
       return;
     }
 
@@ -1358,37 +1358,37 @@
       let hist = [];
 
       if (includeSubs) {
-        setProgress("正在获取书架订阅...", 10);
+        setProgress("正在获取书架数据...", 10);
         subs = await fetchAllSubscriptions(token, (cur, total) => {
           const pct = Math.round((cur / (total || 1)) * 40) + 10;
-          setProgress(`拉取书架中 (${cur}/${total})...`, pct);
+          setProgress(`正在获取书架数据 (${cur}/${total})...`, pct);
         });
-        logMessage(`✓ 已拉取 ${subs.length} 本书架漫画`);
+        logMessage(`已获取 ${subs.length} 本书架漫画`);
       }
 
       if (includeHist) {
-        setProgress("正在获取阅读历史...", 50);
+        setProgress("正在获取历史数据...", 50);
         hist = await fetchAllReadingHistory(token, (cur, total) => {
           const pct = Math.round((cur / (total || 1)) * 40) + 50;
-          setProgress(`拉取历史中 (${cur}/${total})...`, pct);
+          setProgress(`正在获取历史数据 (${cur}/${total})...`, pct);
         });
-        logMessage(`✓ 已拉取 ${hist.length} 条阅读历史`);
+        logMessage(`已获取 ${hist.length} 条历史记录`);
       }
 
-      setProgress("正在转换与生成 Mihon 备份...", 95);
+      setProgress("正在生成备份文件...", 95);
       const backup = await convertToMihonBackup(subs, hist, catName);
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
       const filename = `copymanga_backup_${timestamp}.tachibk`;
       serializeAndDownloadTachibk(backup, filename);
 
-      setProgress("导出完成！已开始下载", 100);
-      logMessage(`✓ 备份已生成: ${filename} (总计 ${backup.backupManga.length} 本漫画)`);
-      notifyUser("copy2mihon 导出完成", `${filename} (${backup.backupManga.length} 本漫画)`);
+      setProgress("导出完成，正在下载", 100);
+      logMessage(`备份已生成: ${filename} (共 ${backup.backupManga.length} 本)`);
+      notifyUser("Mihon 备份已生成", `${filename} (共 ${backup.backupManga.length} 本)`);
     } catch (err) {
-      logMessage("✕ 错误: " + err.message);
-      setProgress("导出出错", 0);
-      notifyUser("copy2mihon 导出失败", err.message);
+      logMessage("导出失败: " + err.message);
+      setProgress("导出失败", 0);
+      notifyUser("导出失败", err.message);
     }
   }
 
@@ -1398,7 +1398,7 @@
 
     const token = detectedToken || detectTokenFromStorage();
     if (!token) {
-      alert("未检测到登录信息，请先在当前网站登录账号后再导出！");
+      alert("未检测到登录信息，请先在当前网站登录账号后再导出。");
       e.target.value = '';
       return;
     }
@@ -1407,41 +1407,41 @@
     if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
 
     try {
-      setProgress("正在读取本地 .tachibk 文件...", 10);
+      setProgress("正在读取本地备份...", 10);
       const arrayBuffer = await file.arrayBuffer();
       const unzippedBytes = window.pako.ungzip(new Uint8Array(arrayBuffer));
 
       const Backup = initProtobuf();
       const existingBackup = Backup.decode(unzippedBytes);
-      logMessage(`✓ 本地备份解析成功 (原有 ${existingBackup.backupManga.length} 本漫画)`);
+      logMessage(`已读取本地备份 (原有 ${existingBackup.backupManga.length} 本漫画)`);
 
-      setProgress("正在从云端拉取最新书架订阅...", 30);
+      setProgress("正在获取云端书架数据...", 30);
       const subs = await fetchAllSubscriptions(token, (cur, total) => {
-        setProgress(`拉取书架 (${cur}/${total})...`, 30 + Math.round((cur / (total || 1)) * 25));
+        setProgress(`正在获取书架数据 (${cur}/${total})...`, 30 + Math.round((cur / (total || 1)) * 25));
       });
 
-      setProgress("正在从云端拉取最新阅读历史...", 60);
+      setProgress("正在获取云端历史数据...", 60);
       const hist = await fetchAllReadingHistory(token, (cur, total) => {
-        setProgress(`拉取历史 (${cur}/${total})...`, 60 + Math.round((cur / (total || 1)) * 25));
+        setProgress(`正在获取历史数据 (${cur}/${total})...`, 60 + Math.round((cur / (total || 1)) * 25));
       });
 
-      setProgress("正在增量合并至本地备份...", 90);
+      setProgress("正在合并数据...", 90);
       const { mergedBackup, stats } = await mergeWithLocalBackup(existingBackup, subs, hist, catName);
 
       const outName = file.name.replace(/\.tachibk$/i, '') + '_merged.tachibk';
       serializeAndDownloadTachibk(mergedBackup, outName);
 
-      setProgress("合并完成！已触发下载", 100);
-      logMessage(`✓ 合并完成并保存: ${outName}`);
+      setProgress("合并完成，正在下载", 100);
+      logMessage(`合并完成: ${outName}`);
       logMessage(`  - 新增漫画: ${stats.new_manga_added} 本`);
       logMessage(`  - 更新书架: ${stats.updated_favorites} 本`);
       logMessage(`  - 标记已读: ${stats.chapters_marked_read} 话`);
       logMessage(`  - 更新历史: ${stats.updated_history} 条`);
-      notifyUser("copy2mihon 合并完成", `${outName}\n新增 ${stats.new_manga_added} 本, 标记已读 ${stats.chapters_marked_read} 话`);
+      notifyUser("Mihon 备份合并完成", `${outName}\n新增 ${stats.new_manga_added} 本，标记已读 ${stats.chapters_marked_read} 话`);
     } catch (err) {
-      logMessage("✕ 错误: " + err.message);
-      setProgress("合并出错", 0);
-      notifyUser("copy2mihon 合并失败", err.message);
+      logMessage("合并失败: " + err.message);
+      setProgress("合并失败", 0);
+      notifyUser("合并失败", err.message);
     } finally {
       e.target.value = '';
     }
