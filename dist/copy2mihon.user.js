@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.2.1
+// @version      0.3.0
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -18,6 +18,7 @@
 // @grant        GM_setClipboard
 // @grant        GM_notification
 // @grant        GM_cookie
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -851,238 +852,380 @@
     downloadBlob(blob, filename);
   }
 
-  // --- UI Components & Styles ---
+  // --- UI Components & Styles (Native Embedded Style) ---
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      #c2m-fab {
+      /* Top Slim Progress Bar (YouTube/GitHub style) */
+      #c2m-top-progress {
         position: fixed;
-        bottom: 24px;
-        right: 24px;
-        width: 52px;
-        height: 52px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #6366f1, #8b5cf6);
-        color: white;
-        display: flex;
+        top: 0;
+        left: 0;
+        height: 2.5px;
+        width: 0%;
+        background: #0084ff;
+        z-index: 1000000;
+        transition: width 0.25s ease, opacity 0.4s ease;
+        box-shadow: 0 0 8px rgba(0, 132, 255, 0.7);
+        pointer-events: none;
+      }
+
+      /* Native Nav Item / Action Button */
+      .c2m-native-nav-btn {
+        display: inline-flex;
         align-items: center;
-        justify-content: center;
-        font-size: 24px;
-        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+        gap: 5px;
+        padding: 5px 12px;
+        margin: 0 4px;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: inherit;
+        background: rgba(0, 132, 255, 0.1);
+        border: 1px solid rgba(0, 132, 255, 0.3);
+        border-radius: 6px;
         cursor: pointer;
-        z-index: 999999;
-        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: all 0.2s ease;
+        text-decoration: none;
         user-select: none;
+        line-height: normal;
+        vertical-align: middle;
       }
-      #c2m-fab:hover {
-        transform: scale(1.08) translateY(-2px);
-        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.55);
+      .c2m-native-nav-btn:hover {
+        background: #0084ff;
+        color: #ffffff !important;
+        border-color: #0084ff;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 132, 255, 0.35);
       }
-      #c2m-panel {
-        position: fixed;
-        bottom: 88px;
-        right: 24px;
-        width: 360px;
-        background: rgba(255, 255, 255, 0.96);
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(229, 231, 235, 0.8);
-        border-radius: 16px;
-        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.12);
-        z-index: 999999;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        color: #1f2937;
-        overflow: hidden;
-        display: none;
-        animation: c2m-slide-up 0.25s ease-out;
-      }
-      @keyframes c2m-slide-up {
-        from { opacity: 0; transform: translateY(12px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      .c2m-header {
-        background: linear-gradient(135deg, #4f46e5, #7c3aed);
-        color: white;
-        padding: 14px 18px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      .c2m-title {
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: 0.3px;
-        display: flex;
+
+      /* Native Bookshelf Toolbar Button */
+      .c2m-bookshelf-btn {
+        display: inline-flex;
         align-items: center;
         gap: 6px;
+        padding: 6px 14px;
+        margin-left: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #ffffff !important;
+        background: #0084ff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        box-shadow: 0 2px 6px rgba(0, 132, 255, 0.25);
       }
-      .c2m-body {
-        padding: 16px;
+      .c2m-bookshelf-btn:hover {
+        background: #0073e6;
+        box-shadow: 0 3px 10px rgba(0, 132, 255, 0.4);
+      }
+
+      /* Modal Overlay */
+      #c2m-modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.55);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 999999;
+        backdrop-filter: blur(4px);
+        animation: c2m-fade-in 0.18s ease-out;
+      }
+      @keyframes c2m-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
+      /* Modal Card */
+      #c2m-modal-card {
+        width: 420px;
+        max-width: 92vw;
+        background: #ffffff;
+        color: #2c3e50;
+        border-radius: 12px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+        border: 1px solid #e2e8f0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        overflow: hidden;
+        animation: c2m-zoom-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes c2m-zoom-in {
+        from { opacity: 0; transform: scale(0.95) translateY(8px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+
+      /* Dark Theme Support */
+      @media (prefers-color-scheme: dark) {
+        #c2m-modal-card {
+          background: #1f2026;
+          color: #e2e8f0;
+          border-color: #333642;
+          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+        }
+      }
+
+      .c2m-modal-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid #edf2f7;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      @media (prefers-color-scheme: dark) {
+        .c2m-modal-header { border-bottom-color: #2d313d; }
+      }
+      .c2m-modal-title {
+        font-size: 15.5px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .c2m-close-btn {
+        font-size: 18px;
+        cursor: pointer;
+        color: #94a3b8;
+        padding: 2px 6px;
+        border-radius: 6px;
+        transition: all 0.15s ease;
+      }
+      .c2m-close-btn:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: #ef4444;
+      }
+
+      .c2m-modal-body {
+        padding: 20px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
       }
-      .c2m-token-badge {
+
+      .c2m-token-bar {
         font-size: 12px;
-        padding: 6px 10px;
+        padding: 8px 12px;
         border-radius: 8px;
-        background: #f3f4f6;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
-      .c2m-token-ok { color: #059669; font-weight: 600; }
-      .c2m-token-no { color: #dc2626; font-weight: 600; }
+      @media (prefers-color-scheme: dark) {
+        .c2m-token-bar {
+          background: #282a33;
+          border-color: #383b47;
+        }
+      }
+      .c2m-token-green { color: #10b981; font-weight: 600; }
+      .c2m-token-red { color: #ef4444; font-weight: 600; }
+
+      .c2m-btn-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
       .c2m-btn {
-        width: 100%;
-        padding: 10px;
-        border-radius: 10px;
-        font-size: 13.5px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
-        border: none;
+        border: 1px solid transparent;
         transition: all 0.15s ease;
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 6px;
+        user-select: none;
       }
-      .c2m-btn-primary {
-        background: #4f46e5;
+      .c2m-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .c2m-btn-full { grid-column: span 2; }
+      
+      .c2m-btn-main {
+        background: #0084ff;
         color: white;
       }
-      .c2m-btn-primary:hover { background: #4338ca; }
-      .c2m-btn-secondary {
-        background: #f3f4f6;
-        color: #374151;
+      .c2m-btn-main:hover:not(:disabled) { background: #0073e6; }
+
+      .c2m-btn-sub {
+        background: #f1f5f9;
+        color: #334155;
+        border-color: #e2e8f0;
       }
-      .c2m-btn-secondary:hover { background: #e5e7eb; }
-      .c2m-btn-success {
-        background: #10b981;
+      .c2m-btn-sub:hover:not(:disabled) {
+        background: #e2e8f0;
+      }
+      @media (prefers-color-scheme: dark) {
+        .c2m-btn-sub {
+          background: #282a33;
+          color: #cbd5e1;
+          border-color: #383b47;
+        }
+        .c2m-btn-sub:hover:not(:disabled) { background: #333644; }
+      }
+
+      .c2m-btn-emerald {
+        background: #059669;
         color: white;
       }
-      .c2m-btn-success:hover { background: #059669; }
-      .c2m-progress-container {
+      .c2m-btn-emerald:hover:not(:disabled) { background: #047857; }
+
+      .c2m-opt-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12.5px;
+        color: #64748b;
+      }
+      .c2m-text-input {
+        padding: 5px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        font-size: 12px;
+        width: 120px;
+        background: inherit;
+        color: inherit;
+      }
+      @media (prefers-color-scheme: dark) {
+        .c2m-text-input { border-color: #475569; }
+      }
+
+      .c2m-progress-panel {
         display: none;
         flex-direction: column;
         gap: 6px;
         margin-top: 4px;
       }
-      .c2m-progress-bar-bg {
+      .c2m-meter-bg {
         height: 6px;
-        background: #e5e7eb;
+        background: #e2e8f0;
         border-radius: 999px;
         overflow: hidden;
       }
-      .c2m-progress-bar-fill {
+      @media (prefers-color-scheme: dark) {
+        .c2m-meter-bg { background: #333644; }
+      }
+      .c2m-meter-fill {
         height: 100%;
         width: 0%;
-        background: linear-gradient(90deg, #4f46e5, #10b981);
+        background: #0084ff;
         transition: width 0.2s ease;
       }
-      .c2m-progress-text {
-        font-size: 11.5px;
-        color: #6b7280;
+      .c2m-progress-info {
+        font-size: 12px;
+        color: #64748b;
         display: flex;
         justify-content: space-between;
       }
-      .c2m-log {
+
+      .c2m-log-terminal {
         font-size: 11.5px;
-        color: #4b5563;
-        background: #f9fafb;
-        border: 1px solid #f3f4f6;
+        color: #64748b;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
         border-radius: 8px;
-        padding: 8px;
-        max-height: 80px;
+        padding: 10px;
+        max-height: 90px;
         overflow-y: auto;
         white-space: pre-wrap;
         word-break: break-all;
         display: none;
       }
-      .c2m-settings-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-size: 12.5px;
-        color: #4b5563;
-      }
-      .c2m-input {
-        padding: 4px 8px;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        font-size: 12px;
-        width: 110px;
+      @media (prefers-color-scheme: dark) {
+        .c2m-log-terminal {
+          background: #191a1f;
+          border-color: #2d313d;
+          color: #94a3b8;
+        }
       }
     `;
     document.head.appendChild(style);
   }
 
-  // Cached DOM references, populated once in createUI(). Avoids repeated
-  // getElementById lookups from setProgress()/logMessage(), which fire on
-  // every page during pagination.
   const UI = {};
 
+  function openModal() {
+    if (UI.overlay) {
+      UI.overlay.style.display = 'flex';
+      updateTokenDisplay();
+    }
+  }
+
+  function closeModal() {
+    if (UI.overlay) {
+      UI.overlay.style.display = 'none';
+    }
+  }
+
   function createUI() {
-    if (document.getElementById('c2m-fab')) return; // already injected (SPA re-run guard)
+    if (document.getElementById('c2m-modal-overlay')) return; // already injected
 
     injectStyles();
 
-    // FAB Button
-    const fab = document.createElement('div');
-    fab.id = 'c2m-fab';
-    fab.innerHTML = '📖';
-    fab.title = '打开 copy2mihon 导出面板';
-    document.body.appendChild(fab);
+    // Top slim progress bar
+    const topProgress = document.createElement('div');
+    topProgress.id = 'c2m-top-progress';
+    document.body.appendChild(topProgress);
 
-    // Panel
-    const panel = document.createElement('div');
-    panel.id = 'c2m-panel';
-    panel.innerHTML = `
-      <div class="c2m-header">
-        <div class="c2m-title">📖 copy2mihon 备份助手</div>
-        <div style="cursor:pointer;font-size:16px;" id="c2m-close">✕</div>
-      </div>
-      <div class="c2m-body">
-        <div class="c2m-token-badge">
-          <span id="c2m-token-status">检测中...</span>
-          <a href="javascript:void(0)" id="c2m-set-token-btn" style="color:#4f46e5;font-size:11.5px;text-decoration:none;">手动设置</a>
+    // Centered Modal Dialog
+    const overlay = document.createElement('div');
+    overlay.id = 'c2m-modal-overlay';
+    overlay.innerHTML = `
+      <div id="c2m-modal-card">
+        <div class="c2m-modal-header">
+          <div class="c2m-modal-title">📦 拷贝漫画 → Mihon 备份工具</div>
+          <div class="c2m-close-btn" id="c2m-close-modal">✕</div>
         </div>
-
-        <button class="c2m-btn c2m-btn-primary" id="c2m-export-all">
-          📥 导出全部 (书架 + 历史)
-        </button>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <button class="c2m-btn c2m-btn-secondary" id="c2m-export-subs">📚 仅书架</button>
-          <button class="c2m-btn c2m-btn-secondary" id="c2m-export-hist">🕒 仅历史</button>
-        </div>
-
-        <button class="c2m-btn c2m-btn-success" id="c2m-merge-btn">
-          🔄 合并至本地 .tachibk 备份
-        </button>
-        <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
-
-        <div class="c2m-settings-row">
-          <span>书架分类名称:</span>
-          <input type="text" class="c2m-input" id="c2m-category-input" value="拷贝漫画" />
-        </div>
-
-        <div class="c2m-progress-container" id="c2m-progress-box">
-          <div class="c2m-progress-bar-bg">
-            <div class="c2m-progress-bar-fill" id="c2m-progress-fill"></div>
+        <div class="c2m-modal-body">
+          <div class="c2m-token-bar">
+            <span id="c2m-token-status">正在检测登录态...</span>
+            <a href="javascript:void(0)" id="c2m-set-token-btn" style="color:#0084ff;font-size:12px;text-decoration:none;">手动设置</a>
           </div>
-          <div class="c2m-progress-text">
-            <span id="c2m-progress-msg">准备拉取...</span>
-            <span id="c2m-progress-count">0%</span>
-          </div>
-        </div>
 
-        <div class="c2m-log" id="c2m-log-box"></div>
+          <div class="c2m-btn-grid">
+            <button class="c2m-btn c2m-btn-main c2m-btn-full" id="c2m-export-all">
+              ⚡ 一键导出全部 (书架 + 历史)
+            </button>
+            <button class="c2m-btn c2m-btn-sub" id="c2m-export-subs">📚 仅书架订阅</button>
+            <button class="c2m-btn c2m-btn-sub" id="c2m-export-hist">🕒 仅阅读历史</button>
+            <button class="c2m-btn c2m-btn-emerald c2m-btn-full" id="c2m-merge-btn">
+              🔄 合并至本地 .tachibk 备份
+            </button>
+          </div>
+          <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
+
+          <div class="c2m-opt-row">
+            <span>Mihon 分类名称:</span>
+            <input type="text" class="c2m-text-input" id="c2m-category-input" value="拷贝漫画" />
+          </div>
+
+          <div class="c2m-progress-panel" id="c2m-progress-box">
+            <div class="c2m-meter-bg">
+              <div class="c2m-meter-fill" id="c2m-progress-fill"></div>
+            </div>
+            <div class="c2m-progress-info">
+              <span id="c2m-progress-msg">准备就绪</span>
+              <span id="c2m-progress-count">0%</span>
+            </div>
+          </div>
+
+          <div class="c2m-log-terminal" id="c2m-log-box"></div>
+        </div>
       </div>
     `;
-    document.body.appendChild(panel);
+    document.body.appendChild(overlay);
 
     // Cache refs
-    UI.panel = panel;
+    UI.topProgress = topProgress;
+    UI.overlay = overlay;
     UI.tokenStatus = document.getElementById('c2m-token-status');
     UI.exportAllBtn = document.getElementById('c2m-export-all');
     UI.exportSubsBtn = document.getElementById('c2m-export-subs');
@@ -1097,13 +1240,15 @@
     UI.logBox = document.getElementById('c2m-log-box');
 
     // Event Bindings
-    fab.addEventListener('click', () => {
-      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
-      updateTokenDisplay();
+    document.getElementById('c2m-close-modal').addEventListener('click', closeModal);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeModal();
     });
 
-    document.getElementById('c2m-close').addEventListener('click', () => {
-      panel.style.display = 'none';
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && overlay.style.display === 'flex') {
+        closeModal();
+      }
     });
 
     document.getElementById('c2m-set-token-btn').addEventListener('click', () => {
@@ -1123,16 +1268,104 @@
     UI.mergeBtn.addEventListener('click', () => UI.fileInput.click());
     UI.fileInput.addEventListener('change', handleMergeFileSelected);
 
+    // Register Native Menu Commands in Tampermonkey
+    if (typeof GM_registerMenuCommand === 'function') {
+      GM_registerMenuCommand("📦 打开 copy2mihon 面板", openModal);
+      GM_registerMenuCommand("⚡ 一键导出完整备份", () => { openModal(); runExportPipeline(true, true); });
+      GM_registerMenuCommand("🔄 合并本地 .tachibk 备份", () => { openModal(); UI.fileInput.click(); });
+    }
+
+    // Try injecting native buttons into page navbar and bookshelf
+    injectNativePageButtons();
+
     updateTokenDisplay();
+  }
+
+  // Inject buttons into native CopyManga navbar and personal center
+  function injectNativePageButtons() {
+    if (document.getElementById('c2m-nav-injected-btn')) return;
+
+    // 1. Try injecting into Top Navbar
+    const navTargets = [
+      '.nav-list',
+      '.header-content ul',
+      '.navbar-nav',
+      '.header ul',
+      '.user-box',
+      '.header .right',
+      '.header-right',
+      '.nav-content'
+    ];
+
+    let navContainer = null;
+    for (const sel of navTargets) {
+      const el = document.querySelector(sel);
+      if (el) {
+        navContainer = el;
+        break;
+      }
+    }
+
+    if (navContainer) {
+      const btn = document.createElement('a');
+      btn.id = 'c2m-nav-injected-btn';
+      btn.className = 'c2m-native-nav-btn';
+      btn.href = 'javascript:void(0);';
+      btn.innerHTML = '📦 导出 Mihon';
+      btn.title = '一键导出或合并拷贝漫画备份至 Mihon';
+      btn.addEventListener('click', openModal);
+
+      const li = document.createElement('li');
+      li.style.display = 'inline-flex';
+      li.style.alignItems = 'center';
+      li.appendChild(btn);
+      navContainer.appendChild(li);
+    } else {
+      // Fallback clean top header link
+      const fallbackBtn = document.createElement('div');
+      fallbackBtn.id = 'c2m-nav-injected-btn';
+      fallbackBtn.className = 'c2m-native-nav-btn';
+      fallbackBtn.style.position = 'fixed';
+      fallbackBtn.style.top = '12px';
+      fallbackBtn.style.right = '120px';
+      fallbackBtn.style.zIndex = '99999';
+      fallbackBtn.innerHTML = '📦 导出 Mihon';
+      fallbackBtn.addEventListener('click', openModal);
+      document.body.appendChild(fallbackBtn);
+    }
+
+    // 2. Try injecting into Personal Center / Bookshelf Toolbar
+    const bookshelfTargets = [
+      '.person-nav',
+      '.person-header',
+      '.tab-list',
+      '.classify',
+      '.table-action',
+      '.bookshelf-toolbar',
+      '.shujia-header'
+    ];
+
+    for (const sel of bookshelfTargets) {
+      const bsEl = document.querySelector(sel);
+      if (bsEl && !document.getElementById('c2m-bookshelf-injected-btn')) {
+        const bsBtn = document.createElement('button');
+        bsBtn.id = 'c2m-bookshelf-injected-btn';
+        bsBtn.className = 'c2m-bookshelf-btn';
+        bsBtn.innerHTML = '📦 导出到 Mihon 备份';
+        bsBtn.addEventListener('click', openModal);
+        bsEl.appendChild(bsBtn);
+        break;
+      }
+    }
   }
 
   function updateTokenDisplay() {
     if (!UI.tokenStatus) return;
     const token = detectedToken || detectTokenFromStorage();
     if (token) {
-      UI.tokenStatus.innerHTML = `<span class="c2m-token-ok">● Token: ${token.slice(0, 6)}...${token.slice(-4)}</span>`;
+      UI.tokenStatus.innerHTML = `<span class="c2m-token-green">● Token 已就绪 (${token.slice(0, 6)}...${token.slice(-4)})</span>`;
     } else {
-      UI.tokenStatus.innerHTML = `<span class="c2m-token-no">● 未检测到 Token</span>`;
+      UI.tokenStatus.innerHTML = `<span class="c2m-token-red">● 未检测到 Token (请确认已登录)</span>`;
     }
   }
 
@@ -1144,10 +1377,18 @@
   }
 
   function setProgress(msg, percent = 0) {
+    const p = Math.min(100, Math.max(0, percent));
+    if (UI.topProgress) {
+      UI.topProgress.style.opacity = p > 0 && p < 100 ? '1' : (p === 100 ? '1' : '0');
+      UI.topProgress.style.width = `${p}%`;
+      if (p === 100) {
+        setTimeout(() => { if (UI.topProgress) UI.topProgress.style.opacity = '0'; }, 800);
+      }
+    }
     if (UI.progressBox) UI.progressBox.style.display = 'flex';
-    if (UI.progressFill) UI.progressFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    if (UI.progressFill) UI.progressFill.style.width = `${p}%`;
     if (UI.progressMsg) UI.progressMsg.textContent = msg;
-    if (UI.progressCount) UI.progressCount.textContent = `${Math.round(percent)}%`;
+    if (UI.progressCount) UI.progressCount.textContent = `${Math.round(p)}%`;
   }
 
   // --- Pipeline Executions ---
