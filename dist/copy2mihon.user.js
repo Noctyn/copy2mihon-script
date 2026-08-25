@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.7
+// @version      0.4.0
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -1049,6 +1049,17 @@
         color: #ffffff;
       }
 
+      .c2m-btn-orange {
+        color: #ffffff;
+        background-color: #e6a23c;
+        border-color: #e6a23c;
+      }
+      .c2m-btn-orange:hover:not(:disabled) {
+        background: #ebb563;
+        border-color: #ebb563;
+        color: #ffffff;
+      }
+
       .c2m-opt-row {
         display: flex;
         align-items: center;
@@ -1170,8 +1181,12 @@
             <button class="c2m-btn c2m-btn-emerald c2m-btn-full" id="c2m-merge-btn">
               合并到本地备份 (.tachibk)
             </button>
+            <button class="c2m-btn c2m-btn-orange c2m-btn-full" id="c2m-sync-cloud-btn">
+              导入本地备份并批量订阅到拷贝
+            </button>
           </div>
           <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
+          <input type="file" id="c2m-sync-file-input" accept=".tachibk" style="display:none;" />
 
           <div class="c2m-opt-row">
             <span>分类名称:</span>
@@ -1201,7 +1216,9 @@
     UI.exportSubsBtn = document.getElementById('c2m-export-subs');
     UI.exportHistBtn = document.getElementById('c2m-export-hist');
     UI.mergeBtn = document.getElementById('c2m-merge-btn');
+    UI.syncCloudBtn = document.getElementById('c2m-sync-cloud-btn');
     UI.fileInput = document.getElementById('c2m-file-input');
+    UI.syncFileInput = document.getElementById('c2m-sync-file-input');
     UI.categoryInput = document.getElementById('c2m-category-input');
     UI.progressBox = document.getElementById('c2m-progress-box');
     UI.progressFill = document.getElementById('c2m-progress-fill');
@@ -1228,11 +1245,15 @@
     UI.mergeBtn.addEventListener('click', () => UI.fileInput.click());
     UI.fileInput.addEventListener('change', handleMergeFileSelected);
 
+    UI.syncCloudBtn.addEventListener('click', () => UI.syncFileInput.click());
+    UI.syncFileInput.addEventListener('change', handleSyncToCloudFileSelected);
+
     // Register Native Menu Commands in Tampermonkey
     if (typeof GM_registerMenuCommand === 'function') {
       GM_registerMenuCommand("打开导出面板", openModal);
       GM_registerMenuCommand("导出完整备份", () => { openModal(); runExportPipeline(true, true); });
       GM_registerMenuCommand("合并本地备份", () => { openModal(); UI.fileInput.click(); });
+      GM_registerMenuCommand("导入备份批量订阅到拷贝", () => { openModal(); UI.syncFileInput.click(); });
     }
 
     // Try injecting native buttons into page navbar and bookshelf
@@ -1425,6 +1446,152 @@
       logMessage("合并失败: " + err.message);
       setProgress("合并失败", 0);
       notifyUser("合并失败", err.message);
+    } finally {
+      e.target.value = '';
+    }
+  }
+
+  async function handleSyncToCloudFileSelected(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const token = detectedToken || detectTokenFromStorage();
+    if (!token) {
+      alert("未检测到登录信息，请先在当前页面登录账号后再操作。");
+      e.target.value = '';
+      return;
+    }
+
+    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
+
+    try {
+      setProgress("正在读取本地备份文件...", 5);
+      const arrayBuffer = await file.arrayBuffer();
+      const unzippedBytes = window.pako.ungzip(new Uint8Array(arrayBuffer));
+
+      const Backup = initProtobuf();
+      const backupObj = Backup.decode(unzippedBytes);
+      logMessage(`已读取本地备份 (原有 ${backupObj.backupManga.length} 本漫画)`);
+
+      // 1. Filter CopyManga comics (by source ID or /comic/ URL pattern)
+      const targetMangaList = (backupObj.backupManga || []).filter(m => {
+        const isCopySource = String(m.source) === String(DEFAULT_COPYMANGA_SOURCE_ID);
+        const hasCopyUrl = m.url && m.url.includes('/comic/');
+        return (isCopySource || hasCopyUrl) && (m.favorite !== false);
+      });
+
+      if (targetMangaList.length === 0) {
+        logMessage("备份文件中未找到属于拷贝漫画的收藏数据。");
+        setProgress("未找到待订阅漫画", 0);
+        return;
+      }
+
+      logMessage(`找到 ${targetMangaList.length} 本拷贝漫画收藏数据`);
+
+      // 2. Fetch current cloud subscriptions to skip already-subscribed comics
+      setProgress("正在获取云端已有书架...", 15);
+      let existingCloudSubs = [];
+      try {
+        existingCloudSubs = await fetchAllSubscriptions(token, () => {});
+      } catch (err) {
+        logMessage(`获取云端已有书架失败: ${err.message}，将直接进行订阅尝试`);
+      }
+
+      const existingPwSet = new Set();
+      for (const item of existingCloudSubs) {
+        const comic = item.comic || item;
+        const pw = (comic.path_word || item.comic_path_word || item.path_word || "").trim().toLowerCase();
+        if (pw) existingPwSet.add(pw);
+      }
+      logMessage(`云端书架已有 ${existingCloudSubs.length} 本漫画`);
+
+      // 3. Extract path_words for all target manga
+      const toSubscribe = [];
+      for (const m of targetMangaList) {
+        const match = (m.url || "").match(/\/comic\/([^/?#]+)/);
+        const pw = match ? match[1].trim() : "";
+        if (!pw) continue;
+        if (existingPwSet.has(pw.toLowerCase())) {
+          continue;
+        }
+        toSubscribe.push({ pw, title: repairMojibake(m.title || pw) });
+      }
+
+      const skippedCount = targetMangaList.length - toSubscribe.length;
+      if (toSubscribe.length === 0) {
+        setProgress("全部漫画已在云端书架", 100);
+        logMessage(`所有 ${targetMangaList.length} 本漫画均已在云端书架，无需重复订阅`);
+        notifyUser("批量订阅完成", `全部 ${targetMangaList.length} 本漫画已在云端书架`);
+        return;
+      }
+
+      logMessage(`需订阅 ${toSubscribe.length} 本新漫画 (跳过已存在 ${skippedCount} 本)`);
+
+      // 4. Batch subscribe loop with concurrency control & real-time progress
+      let successCount = 0;
+      let failCount = 0;
+      const totalToSub = toSubscribe.length;
+
+      for (let i = 0; i < totalToSub; i++) {
+        const item = toSubscribe[i];
+        const pct = 20 + Math.round(((i + 1) / totalToSub) * 75);
+        setProgress(`正在订阅 (${i + 1}/${totalToSub}): ${item.title}...`, pct);
+
+        try {
+          // 4a. Fetch comic detail HTML to get UUID / comic_id
+          const htmlResp = await fetch(`/comic/${encodeURIComponent(item.pw)}`, {
+            headers: { 'Accept': 'text/html,application/xhtml+xml' }
+          });
+          if (!htmlResp.ok) {
+            throw new Error(`页面请求失败 (${htmlResp.status})`);
+          }
+          const html = await htmlResp.text();
+
+          // Extract comic_id (36-char uuid)
+          const uuidMatch = html.match(/collect\(\s*['"]([0-9a-fA-F-]{36})['"]\s*\)/) ||
+                            html.match(/["']comic_id["']\s*:\s*["']([0-9a-fA-F-]{36})["']/i) ||
+                            html.match(/data-id=["']([0-9a-fA-F-]{36})["']/i);
+          if (!uuidMatch || !uuidMatch[1]) {
+            throw new Error("未在页面中解析到 comic_id");
+          }
+          const comicId = uuidMatch[1];
+
+          // 4b. Send collect POST request
+          const postResp = await fetch('/api/v2/web/collect', {
+            method: 'POST',
+            headers: {
+              'Authorization': 'Token ' + token,
+              'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+            },
+            body: `comic_id=${encodeURIComponent(comicId)}&is_collect=1`
+          });
+
+          if (!postResp.ok) {
+            throw new Error(`接口报错 (${postResp.status})`);
+          }
+          const postData = await postResp.json();
+          if (postData.code && postData.code !== 200 && postData.code !== 0) {
+            throw new Error(postData.message || `业务码 ${postData.code}`);
+          }
+
+          successCount++;
+          logMessage(`[${i + 1}/${totalToSub}] 成功订阅: ${item.title}`);
+        } catch (err) {
+          failCount++;
+          logMessage(`[${i + 1}/${totalToSub}] 订阅失败: ${item.title} (${err.message})`);
+        }
+
+        // Delay between requests
+        await sleep(CONFIG.INTER_REQUEST_DELAY_MS || 200);
+      }
+
+      setProgress("批量订阅完成", 100);
+      logMessage(`批量订阅完成: 成功 ${successCount} 本, 失败 ${failCount} 本, 跳过已存在 ${skippedCount} 本`);
+      notifyUser("批量订阅完成", `成功订阅 ${successCount} 本，跳过已存在 ${skippedCount} 本`);
+    } catch (err) {
+      logMessage("操作失败: " + err.message);
+      setProgress("操作失败", 0);
+      notifyUser("批量订阅失败", err.message);
     } finally {
       e.target.value = '';
     }
