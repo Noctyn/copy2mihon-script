@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.2.0
+// @version      0.2.1
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -17,6 +17,7 @@
 // @grant        GM_download
 // @grant        GM_setClipboard
 // @grant        GM_notification
+// @grant        GM_cookie
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -173,78 +174,147 @@
 
   function cleanToken(raw) {
     if (!raw) return "";
-    let t = raw.trim().replace(/^['"]+|['"]+$/g, '');
+    let t = String(raw).trim().replace(/^['"]+|['"]+$/g, '');
     if (t.toLowerCase().startsWith('token ')) t = t.slice(6).trim();
     if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
     return t;
   }
 
-  function detectTokenFromStorage() {
-    if (detectedToken) return detectedToken;
-    const candidates = ['token', 'authorization', 'auth', 'user_token', 'member_token'];
-    for (const k of candidates) {
-      const val = localStorage.getItem(k) || sessionStorage.getItem(k);
-      if (val) {
-        const cleaned = cleanToken(val);
-        if (cleaned.length >= 20) {
-          detectedToken = cleaned;
-          return detectedToken;
+  function detectTokenFromCookie() {
+    try {
+      const docCookie = (typeof document !== 'undefined' ? document.cookie : '') ||
+                        (typeof unsafeWindow !== 'undefined' && unsafeWindow.document ? unsafeWindow.document.cookie : '');
+      if (docCookie) {
+        // Matches token=xxx, authorization=xxx, auth=xxx, etc.
+        const match = docCookie.match(/(?:^|;\s*)(?:token|authorization|auth|copy_token|member_token)=([^;]+)/i);
+        if (match && match[1]) {
+          const cleaned = cleanToken(decodeURIComponent(match[1]));
+          if (cleaned.length >= 20) return cleaned;
         }
       }
-    }
-    // Check vuex in localStorage
-    try {
-      const vuexStr = localStorage.getItem('vuex');
-      if (vuexStr) {
-        const vObj = JSON.parse(vuexStr);
-        if (vObj?.user?.token) return cleanToken(vObj.user.token);
-        if (vObj?.auth?.token) return cleanToken(vObj.auth.token);
-      }
-    } catch (_) { }
-    return "";
+    } catch (_) {}
+    return '';
   }
 
-  // Hook XHR & Fetch to catch Token live
-  function installNetworkHooks() {
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  function detectTokenFromStorage() {
+    if (detectedToken && detectedToken.length >= 20) return detectedToken;
 
-    XMLHttpRequest.prototype.open = function () {
-      this._headers = {};
-      return origOpen.apply(this, arguments);
-    };
+    // 1. Check custom saved token
+    const custom = localStorage.getItem(STORAGE_KEY_TOKEN);
+    if (custom && cleanToken(custom).length >= 20) {
+      detectedToken = cleanToken(custom);
+      return detectedToken;
+    }
 
-    XMLHttpRequest.prototype.setRequestHeader = function (header, value) {
-      if (header && header.toLowerCase() === 'authorization') {
-        const tok = cleanToken(value);
-        if (tok && tok.length >= 20 && tok !== detectedToken) {
-          detectedToken = tok;
-          updateTokenDisplay();
-        }
-      }
-      return origSetHeader.apply(this, arguments);
-    };
+    // 2. Check document.cookie & unsafeWindow.document.cookie
+    const cookieTok = detectTokenFromCookie();
+    if (cookieTok) {
+      detectedToken = cookieTok;
+      return detectedToken;
+    }
 
-    if (window.fetch) {
-      const origFetch = window.fetch;
-      window.fetch = function (resource, init) {
-        if (init && init.headers) {
-          let authHeader = null;
-          if (init.headers instanceof Headers) {
-            authHeader = init.headers.get('authorization');
-          } else if (typeof init.headers === 'object') {
-            authHeader = init.headers['authorization'] || init.headers['Authorization'];
+    // 3. Check localStorage & sessionStorage across window & unsafeWindow
+    const winList = [];
+    if (typeof window !== 'undefined') winList.push(window);
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window) winList.push(unsafeWindow);
+
+    const candidates = ['token', 'authorization', 'auth', 'user_token', 'member_token', 'copy_token'];
+    for (const win of winList) {
+      for (const k of candidates) {
+        try {
+          const val = win.localStorage?.getItem(k) || win.sessionStorage?.getItem(k);
+          if (val) {
+            const cleaned = cleanToken(val);
+            if (cleaned.length >= 20) {
+              detectedToken = cleaned;
+              return detectedToken;
+            }
           }
-          if (authHeader) {
-            const tok = cleanToken(authHeader);
-            if (tok && tok.length >= 20 && tok !== detectedToken) {
+        } catch (_) {}
+      }
+
+      // Check vuex / pinia in localStorage
+      try {
+        const vuexStr = win.localStorage?.getItem('vuex') || win.sessionStorage?.getItem('vuex');
+        if (vuexStr) {
+          const vObj = JSON.parse(vuexStr);
+          const t = vObj?.user?.token || vObj?.auth?.token || vObj?.token || vObj?.userInfo?.token;
+          if (t && cleanToken(t).length >= 20) {
+            detectedToken = cleanToken(t);
+            return detectedToken;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 4. Try GM_cookie if available in extension
+    if (typeof GM_cookie !== 'undefined' && typeof GM_cookie.list === 'function') {
+      try {
+        GM_cookie.list({ name: 'token' }, function (cookies, error) {
+          if (!error && cookies && cookies.length > 0) {
+            const tok = cleanToken(cookies[0].value);
+            if (tok.length >= 20 && tok !== detectedToken) {
               detectedToken = tok;
               updateTokenDisplay();
             }
           }
+        });
+      } catch (_) {}
+    }
+
+    return "";
+  }
+
+  // Hook XHR & Fetch in BOTH window and unsafeWindow to catch Token live
+  function installNetworkHooks() {
+    const winList = [];
+    if (typeof window !== 'undefined') winList.push(window);
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window) winList.push(unsafeWindow);
+
+    for (const win of winList) {
+      try {
+        if (win.XMLHttpRequest && win.XMLHttpRequest.prototype) {
+          const proto = win.XMLHttpRequest.prototype;
+          const origSetHeader = proto.setRequestHeader;
+          if (origSetHeader && !proto._c2m_hooked) {
+            proto._c2m_hooked = true;
+            proto.setRequestHeader = function (header, value) {
+              if (header && header.toLowerCase() === 'authorization') {
+                const tok = cleanToken(value);
+                if (tok && tok.length >= 20 && tok !== detectedToken) {
+                  detectedToken = tok;
+                  updateTokenDisplay();
+                }
+              }
+              return origSetHeader.apply(this, arguments);
+            };
+          }
         }
-        return origFetch.apply(this, arguments);
-      };
+
+        if (win.fetch && !win.fetch._c2m_hooked) {
+          const origFetch = win.fetch;
+          const hookedFetch = function (resource, init) {
+            if (init && init.headers) {
+              let authHeader = null;
+              if (init.headers instanceof Headers) {
+                authHeader = init.headers.get('authorization');
+              } else if (typeof init.headers === 'object') {
+                authHeader = init.headers['authorization'] || init.headers['Authorization'];
+              }
+              if (authHeader) {
+                const tok = cleanToken(authHeader);
+                if (tok && tok.length >= 20 && tok !== detectedToken) {
+                  detectedToken = tok;
+                  updateTokenDisplay();
+                }
+              }
+            }
+            return origFetch.apply(this, arguments);
+          };
+          hookedFetch._c2m_hooked = true;
+          win.fetch = hookedFetch;
+        }
+      } catch (_) {}
     }
   }
 
@@ -1187,10 +1257,26 @@
 
   // --- Initialize ---
   installNetworkHooks();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createUI);
-  } else {
+
+  function onInit() {
     createUI();
+    // Periodic Token Check on startup (in case storage or cookies took a moment to populate)
+    let pollCount = 0;
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      const tok = detectTokenFromStorage();
+      if (tok) {
+        updateTokenDisplay();
+        if (pollCount > 3) clearInterval(pollInterval);
+      }
+      if (pollCount >= 10) clearInterval(pollInterval);
+    }, 1000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onInit);
+  } else {
+    onInit();
   }
 
 })();

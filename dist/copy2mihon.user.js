@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.1.0
+// @version      0.2.1
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -17,9 +17,25 @@
 // @grant        GM_download
 // @grant        GM_setClipboard
 // @grant        GM_notification
+// @grant        GM_cookie
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
+
+/*
+ * v0.2.0 优化说明:
+ * 1. 分页拉取改为有限并发 (默认 3 路)，大幅缩短大书架/长历史的导出时间。
+ * 2. 抽取 makeMangaRecord / makeChapterRecord 公共构造函数，消除 convert/merge 中的重复对象字面量。
+ * 3. memo 空对象字节仅编码一次并复用引用，减少大量 TextEncoder 调用与内存分配。
+ * 4. 合并阶段为每本漫画的章节建立 Map 索引 (按 URL 精确匹配 + 按章节号回退)，
+ *    避免历史记录条目对章节列表做重复线性扫描，同时修复了原 `.includes()` 子串匹配可能误配的问题。
+ * 5. fallback 章节号解析优先匹配"第X话/回/集"模式，避免把卷号误认成话数。
+ * 6. 无 path_word 时的兜底哈希键先做乱码修复 + 归一化，提升书架条目与历史条目匹配到同一部漫画的概率。
+ * 7. fetchWithRetry 增加请求超时 (AbortController) 与带抖动的指数退避，429 重试更平滑。
+ * 8. 下载优先使用 GM_download（绕过部分站点的 CSP 限制），失败时自动回退到原有的 blob+a 标签方式。
+ * 9. 面板 DOM 引用集中缓存，避免高频进度更新时反复 querySelector；并防止脚本在 SPA 场景下重复注入面板。
+ * 10. 关键参数集中到 CONFIG，方便按需调整并发数、超时时间、分页大小等。
+ */
 
 (function () {
   'use strict';
@@ -30,6 +46,14 @@
   const STORAGE_KEY_TOKEN = "copy2mihon_custom_token";
   const STORAGE_KEY_CATEGORY = "copy2mihon_category_name";
   const STORAGE_KEY_EXPORT_JSON = "copy2mihon_export_json";
+
+  const CONFIG = {
+    PAGE_LIMIT: 30,
+    MAX_RETRIES: 3,
+    MAX_CONCURRENCY: 3,
+    REQUEST_TIMEOUT_MS: 15000,
+    INTER_REQUEST_DELAY_MS: 150,
+  };
 
   // --- Protobuf Schema Definition (Mihon Backup) ---
   const PROTO_DEFINITION = `
@@ -133,83 +157,164 @@
     }
   }
 
+  // --- Small utilities ---
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // Encode "{}" once and reuse the same Uint8Array reference everywhere a
+  // placeholder memo is needed instead of re-running TextEncoder per record.
+  const EMPTY_MEMO_BYTES = new TextEncoder().encode("{}");
+  function memoArray() {
+    return [EMPTY_MEMO_BYTES];
+  }
+
   // --- Token Sniffer / Storage ---
   let detectedToken = localStorage.getItem(STORAGE_KEY_TOKEN) || "";
 
   function cleanToken(raw) {
     if (!raw) return "";
-    let t = raw.trim().replace(/^['"]+|['"]+$/g, '');
+    let t = String(raw).trim().replace(/^['"]+|['"]+$/g, '');
     if (t.toLowerCase().startsWith('token ')) t = t.slice(6).trim();
     if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
     return t;
   }
 
-  function detectTokenFromStorage() {
-    if (detectedToken) return detectedToken;
-    const candidates = ['token', 'authorization', 'auth', 'user_token', 'member_token'];
-    for (const k of candidates) {
-      const val = localStorage.getItem(k) || sessionStorage.getItem(k);
-      if (val) {
-        const cleaned = cleanToken(val);
-        if (cleaned.length >= 20) {
-          detectedToken = cleaned;
-          return detectedToken;
-        }
-      }
-    }
-    // Check vuex in localStorage
+  function detectTokenFromCookie() {
     try {
-      const vuexStr = localStorage.getItem('vuex');
-      if (vuexStr) {
-        const vObj = JSON.parse(vuexStr);
-        if (vObj?.user?.token) return cleanToken(vObj.user.token);
-        if (vObj?.auth?.token) return cleanToken(vObj.auth.token);
+      const docCookie = (typeof document !== 'undefined' ? document.cookie : '') ||
+                        (typeof unsafeWindow !== 'undefined' && unsafeWindow.document ? unsafeWindow.document.cookie : '');
+      if (docCookie) {
+        // Matches token=xxx, authorization=xxx, auth=xxx, etc.
+        const match = docCookie.match(/(?:^|;\s*)(?:token|authorization|auth|copy_token|member_token)=([^;]+)/i);
+        if (match && match[1]) {
+          const cleaned = cleanToken(decodeURIComponent(match[1]));
+          if (cleaned.length >= 20) return cleaned;
+        }
       }
     } catch (_) {}
-    return "";
+    return '';
   }
 
-  // Hook XHR & Fetch to catch Token live
-  function installNetworkHooks() {
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  function detectTokenFromStorage() {
+    if (detectedToken && detectedToken.length >= 20) return detectedToken;
 
-    XMLHttpRequest.prototype.open = function () {
-      this._headers = {};
-      return origOpen.apply(this, arguments);
-    };
+    // 1. Check custom saved token
+    const custom = localStorage.getItem(STORAGE_KEY_TOKEN);
+    if (custom && cleanToken(custom).length >= 20) {
+      detectedToken = cleanToken(custom);
+      return detectedToken;
+    }
 
-    XMLHttpRequest.prototype.setRequestHeader = function (header, value) {
-      if (header && header.toLowerCase() === 'authorization') {
-        const tok = cleanToken(value);
-        if (tok && tok.length >= 20 && tok !== detectedToken) {
-          detectedToken = tok;
-          updateTokenDisplay();
-        }
-      }
-      return origSetHeader.apply(this, arguments);
-    };
+    // 2. Check document.cookie & unsafeWindow.document.cookie
+    const cookieTok = detectTokenFromCookie();
+    if (cookieTok) {
+      detectedToken = cookieTok;
+      return detectedToken;
+    }
 
-    if (window.fetch) {
-      const origFetch = window.fetch;
-      window.fetch = function (resource, init) {
-        if (init && init.headers) {
-          let authHeader = null;
-          if (init.headers instanceof Headers) {
-            authHeader = init.headers.get('authorization');
-          } else if (typeof init.headers === 'object') {
-            authHeader = init.headers['authorization'] || init.headers['Authorization'];
+    // 3. Check localStorage & sessionStorage across window & unsafeWindow
+    const winList = [];
+    if (typeof window !== 'undefined') winList.push(window);
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window) winList.push(unsafeWindow);
+
+    const candidates = ['token', 'authorization', 'auth', 'user_token', 'member_token', 'copy_token'];
+    for (const win of winList) {
+      for (const k of candidates) {
+        try {
+          const val = win.localStorage?.getItem(k) || win.sessionStorage?.getItem(k);
+          if (val) {
+            const cleaned = cleanToken(val);
+            if (cleaned.length >= 20) {
+              detectedToken = cleaned;
+              return detectedToken;
+            }
           }
-          if (authHeader) {
-            const tok = cleanToken(authHeader);
-            if (tok && tok.length >= 20 && tok !== detectedToken) {
+        } catch (_) {}
+      }
+
+      // Check vuex / pinia in localStorage
+      try {
+        const vuexStr = win.localStorage?.getItem('vuex') || win.sessionStorage?.getItem('vuex');
+        if (vuexStr) {
+          const vObj = JSON.parse(vuexStr);
+          const t = vObj?.user?.token || vObj?.auth?.token || vObj?.token || vObj?.userInfo?.token;
+          if (t && cleanToken(t).length >= 20) {
+            detectedToken = cleanToken(t);
+            return detectedToken;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 4. Try GM_cookie if available in extension
+    if (typeof GM_cookie !== 'undefined' && typeof GM_cookie.list === 'function') {
+      try {
+        GM_cookie.list({ name: 'token' }, function (cookies, error) {
+          if (!error && cookies && cookies.length > 0) {
+            const tok = cleanToken(cookies[0].value);
+            if (tok.length >= 20 && tok !== detectedToken) {
               detectedToken = tok;
               updateTokenDisplay();
             }
           }
+        });
+      } catch (_) {}
+    }
+
+    return "";
+  }
+
+  // Hook XHR & Fetch in BOTH window and unsafeWindow to catch Token live
+  function installNetworkHooks() {
+    const winList = [];
+    if (typeof window !== 'undefined') winList.push(window);
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window) winList.push(unsafeWindow);
+
+    for (const win of winList) {
+      try {
+        if (win.XMLHttpRequest && win.XMLHttpRequest.prototype) {
+          const proto = win.XMLHttpRequest.prototype;
+          const origSetHeader = proto.setRequestHeader;
+          if (origSetHeader && !proto._c2m_hooked) {
+            proto._c2m_hooked = true;
+            proto.setRequestHeader = function (header, value) {
+              if (header && header.toLowerCase() === 'authorization') {
+                const tok = cleanToken(value);
+                if (tok && tok.length >= 20 && tok !== detectedToken) {
+                  detectedToken = tok;
+                  updateTokenDisplay();
+                }
+              }
+              return origSetHeader.apply(this, arguments);
+            };
+          }
         }
-        return origFetch.apply(this, arguments);
-      };
+
+        if (win.fetch && !win.fetch._c2m_hooked) {
+          const origFetch = win.fetch;
+          const hookedFetch = function (resource, init) {
+            if (init && init.headers) {
+              let authHeader = null;
+              if (init.headers instanceof Headers) {
+                authHeader = init.headers.get('authorization');
+              } else if (typeof init.headers === 'object') {
+                authHeader = init.headers['authorization'] || init.headers['Authorization'];
+              }
+              if (authHeader) {
+                const tok = cleanToken(authHeader);
+                if (tok && tok.length >= 20 && tok !== detectedToken) {
+                  detectedToken = tok;
+                  updateTokenDisplay();
+                }
+              }
+            }
+            return origFetch.apply(this, arguments);
+          };
+          hookedFetch._c2m_hooked = true;
+          win.fetch = hookedFetch;
+        }
+      } catch (_) {}
     }
   }
 
@@ -219,27 +324,6 @@
     const hashBuffer = await crypto.subtle.digest('SHA-1', buffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function stableFallbackKey(comicItem) {
-    const title = comicItem?.name || comicItem?.title || JSON.stringify(comicItem);
-    const hex = await sha1Hex(title);
-    return `nopathword_${hex.slice(0, 12)}`;
-  }
-
-  async function extractPathWord(item, comicData, fallback = true) {
-    let pw = (comicData?.path_word || item?.comic_path_word || item?.path_word || "").trim();
-    if (!pw) {
-      const url = comicData?.url || item?.url || "";
-      if (url) {
-        const match = url.match(/\/comic\/([^/?#]+)/);
-        if (match) pw = match[1].trim();
-      }
-    }
-    if (!pw && fallback) {
-      pw = await stableFallbackKey(comicData || item);
-    }
-    return pw;
   }
 
   function repairMojibake(text) {
@@ -263,6 +347,31 @@
     return res;
   }
 
+  // Normalize before hashing so a subscription payload and a history payload
+  // referring to the same manga (but with slightly different raw title
+  // encoding) still fall back to the same synthetic key.
+  async function stableFallbackKey(comicItem) {
+    const rawTitle = comicItem?.name || comicItem?.title || JSON.stringify(comicItem);
+    const normalized = repairMojibake(rawTitle).trim().toLowerCase();
+    const hex = await sha1Hex(normalized);
+    return `nopathword_${hex.slice(0, 12)}`;
+  }
+
+  async function extractPathWord(item, comicData, fallback = true) {
+    let pw = (comicData?.path_word || item?.comic_path_word || item?.path_word || "").trim();
+    if (!pw) {
+      const url = comicData?.url || item?.url || "";
+      if (url) {
+        const match = url.match(/\/comic\/([^/?#]+)/);
+        if (match) pw = match[1].trim();
+      }
+    }
+    if (!pw && fallback) {
+      pw = await stableFallbackKey(comicData || item);
+    }
+    return pw;
+  }
+
   function parseDateTimeToMs(dateVal) {
     if (!dateVal) return Date.now();
     if (typeof dateVal === 'number') {
@@ -279,8 +388,72 @@
     return Date.now();
   }
 
+  // Prefer an explicit "第X话/回/集" pattern over a bare first-number match,
+  // since volume markers ("第2卷") that precede the real chapter number were
+  // previously picked up by mistake.
+  function parseChapterNumber(chapterName) {
+    if (!chapterName) return 0;
+    const preferred = chapterName.match(/第\s*(\d+(?:\.\d+)?)\s*(?:话|話|回|集)/);
+    if (preferred) return parseFloat(preferred[1]);
+    const allNumbers = chapterName.match(/\d+(?:\.\d+)?/g);
+    if (allNumbers && allNumbers.length > 0) {
+      return parseFloat(allNumbers[allNumbers.length - 1]);
+    }
+    return 0;
+  }
+
+  function extractChapterUuidFromUrl(url) {
+    if (!url) return null;
+    const match = url.match(/\/chapter\/([^/?#]+)/);
+    return match ? match[1] : null;
+  }
+
+  // --- Shared record builders (used by both convert & merge paths) ---
+  function makeMangaRecord({ pw, title, author, cover, status, dateAdded, favorite, categories }) {
+    return {
+      source: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID),
+      url: `/comic/${pw}`,
+      title,
+      author,
+      artist: author,
+      status,
+      thumbnailUrl: cover,
+      dateAdded,
+      favorite,
+      initialized: true,
+      chapterFlags: 513,
+      viewer_flags: 0,
+      categories,
+      chapters: [],
+      history: [],
+      memo: memoArray()
+    };
+  }
+
+  function makeChapterRecord({ url, name, dateFetch, dateUpload, chapterNumber }) {
+    return {
+      url,
+      name,
+      read: true,
+      lastPageRead: 1,
+      dateFetch,
+      dateUpload,
+      chapterNumber,
+      sourceOrder: 0,
+      memo: memoArray()
+    };
+  }
+
+  function deriveComicFields(comic) {
+    const title = repairMojibake(comic.name || comic.title || "Unknown");
+    const author = (comic.author || []).map(a => repairMojibake(a.name || a)).join(", ");
+    const cover = comic.cover || "";
+    const status = (comic.status === 2 || comic.status === "2" || (comic.status_str || "").includes("完结")) ? 2 : 1;
+    return { title, author, cover, status };
+  }
+
   // --- API Client ---
-  async function fetchWithRetry(url, token, maxRetries = 3) {
+  async function fetchWithRetry(url, token, maxRetries = CONFIG.MAX_RETRIES) {
     const headers = {
       'Accept': 'application/json, text/plain, */*',
       'Authorization': `Token ${token}`,
@@ -288,13 +461,18 @@
     };
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.REQUEST_TIMEOUT_MS);
       try {
-        const res = await fetch(url, { headers, method: 'GET' });
+        const res = await fetch(url, { headers, method: 'GET', signal: controller.signal });
+        clearTimeout(timeoutId);
+
         if (res.status === 401 || res.status === 403) {
           throw new Error(`Token 无效或无权限 (${res.status})，请检查 Token。`);
         }
         if (res.status === 429) {
-          await new Promise(r => setTimeout(r, attempt * 2000));
+          const wait = Math.min(8000, attempt * 1500) + Math.random() * 500;
+          await sleep(wait);
           continue;
         }
         if (!res.ok) {
@@ -306,58 +484,76 @@
         }
         return data;
       } catch (err) {
-        if (attempt === maxRetries || err.message.includes('Token 无效')) {
-          throw err;
+        clearTimeout(timeoutId);
+        const isAuthError = err.message && err.message.includes('Token 无效');
+        const isTimeout = err.name === 'AbortError';
+        if (attempt === maxRetries || isAuthError) {
+          throw isTimeout ? new Error('请求超时，请检查网络后重试。') : err;
         }
-        await new Promise(r => setTimeout(r, attempt * 1000));
+        const backoff = Math.min(6000, attempt * 800) + Math.random() * 300;
+        await sleep(backoff);
       }
     }
   }
 
-  async function fetchAllSubscriptions(token, onProgress) {
+  // Generic paginated fetcher with a small worker pool: the first page tells
+  // us the total, then the remaining pages are fetched with limited
+  // concurrency instead of one-at-a-time, which materially speeds up export
+  // for large libraries while still being gentle on the API.
+  async function fetchAllPaginated(buildUrl, token, onProgress) {
+    const { PAGE_LIMIT, MAX_CONCURRENCY, INTER_REQUEST_DELAY_MS } = CONFIG;
     const results = [];
-    let offset = 0;
-    const limit = 30;
-    const baseUrl = window.location.origin;
 
-    while (true) {
-      const url = `${baseUrl}/api/v3/member/collect/comics?limit=${limit}&offset=${offset}&free_type=1&ordering=-datetime_modifier`;
-      const resp = await fetchWithRetry(url, token);
-      const list = resp?.results?.list || [];
-      const total = resp?.results?.total || list.length;
+    const firstResp = await fetchWithRetry(buildUrl(0, PAGE_LIMIT), token);
+    const firstList = firstResp?.results?.list || [];
+    const total = firstResp?.results?.total ?? firstList.length;
+    results.push(...firstList);
+    if (onProgress) onProgress(results.length, total);
 
-      if (list.length === 0) break;
-      results.push(...list);
-      if (onProgress) onProgress(results.length, total);
-
-      if (results.length >= total || list.length < limit) break;
-      offset += limit;
-      await new Promise(r => setTimeout(r, 200));
+    if (firstList.length === 0 || results.length >= total || firstList.length < PAGE_LIMIT) {
+      return results;
     }
+
+    const offsets = [];
+    for (let offset = PAGE_LIMIT; offset < total; offset += PAGE_LIMIT) offsets.push(offset);
+
+    let cursor = 0;
+    let fetchedCount = results.length;
+    const workerCount = Math.max(1, Math.min(MAX_CONCURRENCY, offsets.length));
+
+    async function worker() {
+      while (cursor < offsets.length) {
+        const myIndex = cursor++;
+        const offset = offsets[myIndex];
+        const resp = await fetchWithRetry(buildUrl(offset, PAGE_LIMIT), token);
+        const list = resp?.results?.list || [];
+        results.push(...list);
+        fetchedCount += list.length;
+        if (onProgress) onProgress(fetchedCount, total);
+        if (INTER_REQUEST_DELAY_MS > 0) await sleep(INTER_REQUEST_DELAY_MS);
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
     return results;
   }
 
-  async function fetchAllReadingHistory(token, onProgress) {
-    const results = [];
-    let offset = 0;
-    const limit = 30;
+  function fetchAllSubscriptions(token, onProgress) {
     const baseUrl = window.location.origin;
+    return fetchAllPaginated(
+      (offset, limit) => `${baseUrl}/api/v3/member/collect/comics?limit=${limit}&offset=${offset}&free_type=1&ordering=-datetime_modifier`,
+      token,
+      onProgress
+    );
+  }
 
-    while (true) {
-      const url = `${baseUrl}/api/kb/web/browses?limit=${limit}&offset=${offset}`;
-      const resp = await fetchWithRetry(url, token);
-      const list = resp?.results?.list || [];
-      const total = resp?.results?.total || list.length;
-
-      if (list.length === 0) break;
-      results.push(...list);
-      if (onProgress) onProgress(results.length, total);
-
-      if (results.length >= total || list.length < limit) break;
-      offset += limit;
-      await new Promise(r => setTimeout(r, 200));
-    }
-    return results;
+  function fetchAllReadingHistory(token, onProgress) {
+    const baseUrl = window.location.origin;
+    return fetchAllPaginated(
+      (offset, limit) => `${baseUrl}/api/kb/web/browses?limit=${limit}&offset=${offset}`,
+      token,
+      onProgress
+    );
   }
 
   // --- Data Converter ---
@@ -372,30 +568,14 @@
       if (!pw) continue;
       const url = `/comic/${pw}`;
 
-      const title = repairMojibake(comic.name || comic.title || "");
-      const author = (comic.author || []).map(a => repairMojibake(a.name || a)).join(", ");
-      const cover = comic.cover || "";
-      const status = (comic.status === 2 || comic.status === "2" || (comic.status_str || "").includes("完结")) ? 2 : 1;
+      const { title, author, cover, status } = deriveComicFields(comic);
       const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
 
-      mangaByUrl.set(url, {
-        source: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID),
-        url: url,
-        title: title,
-        author: author,
-        artist: author,
-        status: status,
-        thumbnailUrl: cover,
-        dateAdded: dateAdded,
+      mangaByUrl.set(url, makeMangaRecord({
+        pw, title, author, cover, status, dateAdded,
         favorite: true,
-        initialized: true,
-        chapterFlags: 513,
-        viewer_flags: 0,
-        categories: [...catOrders],
-        chapters: [],
-        history: [],
-        memo: [new TextEncoder().encode("{}")]
-      });
+        categories: [...catOrders]
+      }));
     }
 
     // 2. Process History
@@ -412,63 +592,25 @@
 
       let manga = mangaByUrl.get(url);
       if (!manga) {
-        const title = repairMojibake(comic.name || comic.title || "Unknown Manga");
-        const author = (comic.author || []).map(a => repairMojibake(a.name || a)).join(", ");
-        const cover = comic.cover || "";
-        manga = {
-          source: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID),
-          url: url,
-          title: title,
-          author: author,
-          artist: author,
-          status: 1,
-          thumbnailUrl: cover,
-          dateAdded: readTime,
+        const { title, author, cover } = deriveComicFields(comic);
+        manga = makeMangaRecord({
+          pw, title, author, cover, status: 1, dateAdded: readTime,
           favorite: false,
-          initialized: true,
-          chapterFlags: 513,
-          viewer_flags: 0,
-          categories: [],
-          chapters: [],
-          history: [],
-          memo: [new TextEncoder().encode("{}")]
-        };
+          categories: []
+        });
         mangaByUrl.set(url, manga);
       }
 
       if (chUuid) {
-        let chNum = 0.0;
-        const numMatch = chName.match(/(\d+(\.\d+)?)/);
-        if (numMatch) chNum = parseFloat(numMatch[1]);
-
-        manga.chapters = [{
-          url: chUrl,
-          name: chName,
-          read: true,
-          lastPageRead: 1,
-          dateFetch: readTime,
-          dateUpload: readTime,
-          chapterNumber: chNum,
-          sourceOrder: 0,
-          memo: [new TextEncoder().encode("{}")]
-        }];
-
-        manga.history = [{
-          url: chUrl,
-          lastRead: readTime,
-          readDuration: 0
-        }];
+        const chNum = parseChapterNumber(chName);
+        manga.chapters = [makeChapterRecord({ url: chUrl, name: chName, dateFetch: readTime, dateUpload: readTime, chapterNumber: chNum })];
+        manga.history = [{ url: chUrl, lastRead: readTime, readDuration: 0 }];
       }
     }
 
     const categories = [];
     if (catOrders.length > 0) {
-      categories.push({
-        name: categoryName,
-        id: 1,
-        order: 0,
-        flags: 0
-      });
+      categories.push({ name: categoryName, id: 1, order: 0, flags: 0 });
     }
 
     const sources = [{
@@ -526,6 +668,27 @@
       }
     }
 
+    // Per-manga chapter index (built lazily, keyed by manga object identity)
+    // so repeated history hits against the same manga are O(1) instead of a
+    // fresh linear scan each time.
+    const chapterIndexCache = new Map();
+    function getChapterIndex(manga) {
+      if (chapterIndexCache.has(manga)) return chapterIndexCache.get(manga);
+      const byUuid = new Map();
+      const byNumber = new Map();
+      for (const ch of manga.chapters || []) {
+        const uuid = extractChapterUuidFromUrl(ch.url);
+        if (uuid) byUuid.set(uuid, ch);
+        if (!byNumber.has(ch.chapterNumber)) byNumber.set(ch.chapterNumber, ch);
+      }
+      const index = { byUuid, byNumber };
+      chapterIndexCache.set(manga, index);
+      return index;
+    }
+    function invalidateChapterIndex(manga) {
+      chapterIndexCache.delete(manga);
+    }
+
     // 3. Merge Subscriptions
     for (const item of subscriptions) {
       const comic = item.comic || item;
@@ -544,31 +707,14 @@
           m.categories.push(targetCatOrder);
         }
       } else {
-        const title = repairMojibake(comic.name || comic.title || "Unknown");
-        const author = (comic.author || []).map(a => repairMojibake(a.name || a)).join(", ");
-        const cover = comic.cover || "";
-        const status = (comic.status === 2 || (comic.status_str || "").includes("完结")) ? 2 : 1;
+        const { title, author, cover, status } = deriveComicFields(comic);
         const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
-        const url = `/comic/${pw}`;
 
-        const newManga = {
-          source: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID),
-          url: url,
-          title: title,
-          author: author,
-          artist: author,
-          status: status,
-          thumbnailUrl: cover,
-          dateAdded: dateAdded,
+        const newManga = makeMangaRecord({
+          pw, title, author, cover, status, dateAdded,
           favorite: true,
-          initialized: true,
-          chapterFlags: 513,
-          viewer_flags: 0,
-          categories: targetCatOrder !== null ? [targetCatOrder] : [],
-          chapters: [],
-          history: [],
-          memo: [new TextEncoder().encode("{}")]
-        };
+          categories: targetCatOrder !== null ? [targetCatOrder] : []
+        });
         existingBackup.backupManga.push(newManga);
         mangaByPathWord.set(pwLower, newManga);
         stats.new_manga_added++;
@@ -592,16 +738,11 @@
         stats.updated_history++;
 
         if (m.chapters && m.chapters.length > 0) {
-          let matchedCh = null;
-          if (chUuid) {
-            matchedCh = m.chapters.find(ch => ch.url.includes(chUuid));
-          }
+          const { byUuid, byNumber } = getChapterIndex(m);
+          let matchedCh = chUuid ? byUuid.get(chUuid) : null;
           if (!matchedCh && chName) {
-            const numMatch = chName.match(/(\d+(\.\d+)?)/);
-            if (numMatch) {
-              const val = parseFloat(numMatch[1]);
-              matchedCh = m.chapters.find(ch => Math.abs(ch.chapterNumber - val) < 0.01);
-            }
+            const val = parseChapterNumber(chName);
+            matchedCh = byNumber.get(val);
           }
 
           if (matchedCh) {
@@ -619,55 +760,24 @@
             }
           }
         } else if (chUuid) {
-          let chNum = 0.0;
-          const numMatch = chName.match(/(\d+(\.\d+)?)/);
-          if (numMatch) chNum = parseFloat(numMatch[1]);
-          m.chapters = [{
-            url: chUrl,
-            name: chName,
-            read: true,
-            lastPageRead: 1,
-            dateFetch: readTime,
-            dateUpload: readTime,
-            chapterNumber: chNum,
-            sourceOrder: 0,
-            memo: [new TextEncoder().encode("{}")]
-          }];
+          const chNum = parseChapterNumber(chName);
+          m.chapters = [makeChapterRecord({ url: chUrl, name: chName, dateFetch: readTime, dateUpload: readTime, chapterNumber: chNum })];
           m.history = [{ url: chUrl, lastRead: readTime, readDuration: 0 }];
+          invalidateChapterIndex(m);
         }
       } else {
         if (chUuid) {
-          const title = repairMojibake(comic.name || comic.title || "Unknown");
-          const cover = comic.cover || "";
-          let chNum = 0.0;
-          const numMatch = chName.match(/(\d+(\.\d+)?)/);
-          if (numMatch) chNum = parseFloat(numMatch[1]);
+          const { title, cover } = deriveComicFields(comic);
+          const chNum = parseChapterNumber(chName);
 
-          const newManga = {
-            source: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID),
-            url: `/comic/${pw}`,
-            title: title,
-            status: 1,
-            thumbnailUrl: cover,
-            dateAdded: readTime,
+          const newManga = makeMangaRecord({
+            pw, title, author: "", cover, status: 1, dateAdded: readTime,
             favorite: false,
-            initialized: true,
-            chapterFlags: 513,
-            categories: [],
-            chapters: [{
-              url: chUrl,
-              name: chName,
-              read: true,
-              lastPageRead: 1,
-              dateFetch: readTime,
-              dateUpload: readTime,
-              chapterNumber: chNum,
-              sourceOrder: 0,
-              memo: [new TextEncoder().encode("{}")]
-            }],
-            history: [{ url: chUrl, lastRead: readTime, readDuration: 0 }],
-            memo: [new TextEncoder().encode("{}")]
-          };
+            categories: []
+          });
+          newManga.chapters = [makeChapterRecord({ url: chUrl, name: chName, dateFetch: readTime, dateUpload: readTime, chapterNumber: chNum })];
+          newManga.history = [{ url: chUrl, lastRead: readTime, readDuration: 0 }];
+
           existingBackup.backupManga.push(newManga);
           mangaByPathWord.set(pwLower, newManga);
           stats.new_manga_added++;
@@ -679,8 +789,8 @@
     return { mergedBackup: existingBackup, stats };
   }
 
-  // --- Download Helper ---
-  function downloadBlob(blob, filename) {
+  // --- Download / Notification Helpers ---
+  function fallbackDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -691,6 +801,41 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 1000);
+  }
+
+  function downloadBlob(blob, filename) {
+    // Prefer GM_download: it is handled by the userscript manager itself and
+    // isn't subject to the page's own CSP (some manga sites block blob: URL
+    // navigation / anchor downloads), so it's more reliable when available.
+    if (typeof GM_download === 'function') {
+      const url = URL.createObjectURL(blob);
+      try {
+        GM_download({
+          url,
+          name: filename,
+          saveAs: false,
+          onload: () => URL.revokeObjectURL(url),
+          onerror: () => {
+            URL.revokeObjectURL(url);
+            fallbackDownload(blob, filename);
+          }
+        });
+        return;
+      } catch (_) {
+        URL.revokeObjectURL(url);
+      }
+    }
+    fallbackDownload(blob, filename);
+  }
+
+  function notifyUser(title, text) {
+    if (typeof GM_notification === 'function') {
+      try {
+        GM_notification({ title, text, timeout: 6000 });
+        return;
+      } catch (_) { }
+    }
+    alert(`${title}\n${text}`);
   }
 
   function serializeAndDownloadTachibk(backupObj, filename) {
@@ -871,7 +1016,14 @@
     document.head.appendChild(style);
   }
 
+  // Cached DOM references, populated once in createUI(). Avoids repeated
+  // getElementById lookups from setProgress()/logMessage(), which fire on
+  // every page during pagination.
+  const UI = {};
+
   function createUI() {
+    if (document.getElementById('c2m-fab')) return; // already injected (SPA re-run guard)
+
     injectStyles();
 
     // FAB Button
@@ -929,6 +1081,21 @@
     `;
     document.body.appendChild(panel);
 
+    // Cache refs
+    UI.panel = panel;
+    UI.tokenStatus = document.getElementById('c2m-token-status');
+    UI.exportAllBtn = document.getElementById('c2m-export-all');
+    UI.exportSubsBtn = document.getElementById('c2m-export-subs');
+    UI.exportHistBtn = document.getElementById('c2m-export-hist');
+    UI.mergeBtn = document.getElementById('c2m-merge-btn');
+    UI.fileInput = document.getElementById('c2m-file-input');
+    UI.categoryInput = document.getElementById('c2m-category-input');
+    UI.progressBox = document.getElementById('c2m-progress-box');
+    UI.progressFill = document.getElementById('c2m-progress-fill');
+    UI.progressMsg = document.getElementById('c2m-progress-msg');
+    UI.progressCount = document.getElementById('c2m-progress-count');
+    UI.logBox = document.getElementById('c2m-log-box');
+
     // Event Bindings
     fab.addEventListener('click', () => {
       panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
@@ -949,46 +1116,38 @@
       }
     });
 
-    document.getElementById('c2m-export-all').addEventListener('click', () => runExportPipeline(true, true));
-    document.getElementById('c2m-export-subs').addEventListener('click', () => runExportPipeline(true, false));
-    document.getElementById('c2m-export-hist').addEventListener('click', () => runExportPipeline(false, true));
+    UI.exportAllBtn.addEventListener('click', () => runExportPipeline(true, true));
+    UI.exportSubsBtn.addEventListener('click', () => runExportPipeline(true, false));
+    UI.exportHistBtn.addEventListener('click', () => runExportPipeline(false, true));
 
-    const fileInput = document.getElementById('c2m-file-input');
-    document.getElementById('c2m-merge-btn').addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', handleMergeFileSelected);
+    UI.mergeBtn.addEventListener('click', () => UI.fileInput.click());
+    UI.fileInput.addEventListener('change', handleMergeFileSelected);
 
     updateTokenDisplay();
   }
 
   function updateTokenDisplay() {
-    const statusEl = document.getElementById('c2m-token-status');
-    if (!statusEl) return;
+    if (!UI.tokenStatus) return;
     const token = detectedToken || detectTokenFromStorage();
     if (token) {
-      statusEl.innerHTML = `<span class="c2m-token-ok">● Token: ${token.slice(0, 6)}...${token.slice(-4)}</span>`;
+      UI.tokenStatus.innerHTML = `<span class="c2m-token-ok">● Token: ${token.slice(0, 6)}...${token.slice(-4)}</span>`;
     } else {
-      statusEl.innerHTML = `<span class="c2m-token-no">● 未检测到 Token</span>`;
+      UI.tokenStatus.innerHTML = `<span class="c2m-token-no">● 未检测到 Token</span>`;
     }
   }
 
   function logMessage(msg) {
-    const logBox = document.getElementById('c2m-log-box');
-    if (logBox) {
-      logBox.style.display = 'block';
-      logBox.textContent += msg + '\n';
-      logBox.scrollTop = logBox.scrollHeight;
-    }
+    if (!UI.logBox) return;
+    UI.logBox.style.display = 'block';
+    UI.logBox.textContent += msg + '\n';
+    UI.logBox.scrollTop = UI.logBox.scrollHeight;
   }
 
   function setProgress(msg, percent = 0) {
-    const box = document.getElementById('c2m-progress-box');
-    const fill = document.getElementById('c2m-progress-fill');
-    const msgEl = document.getElementById('c2m-progress-msg');
-    const countEl = document.getElementById('c2m-progress-count');
-    if (box) box.style.display = 'flex';
-    if (fill) fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
-    if (msgEl) msgEl.textContent = msg;
-    if (countEl) countEl.textContent = `${Math.round(percent)}%`;
+    if (UI.progressBox) UI.progressBox.style.display = 'flex';
+    if (UI.progressFill) UI.progressFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    if (UI.progressMsg) UI.progressMsg.textContent = msg;
+    if (UI.progressCount) UI.progressCount.textContent = `${Math.round(percent)}%`;
   }
 
   // --- Pipeline Executions ---
@@ -999,9 +1158,8 @@
       return;
     }
 
-    const catName = document.getElementById('c2m-category-input')?.value || "拷贝漫画";
-    const logBox = document.getElementById('c2m-log-box');
-    if (logBox) { logBox.textContent = ''; logBox.style.display = 'none'; }
+    const catName = UI.categoryInput?.value || "拷贝漫画";
+    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
 
     try {
       let subs = [];
@@ -1034,10 +1192,11 @@
 
       setProgress("导出完成！已开始下载", 100);
       logMessage(`✓ 备份已生成: ${filename} (总计 ${backup.backupManga.length} 本漫画)`);
+      notifyUser("copy2mihon 导出完成", `${filename} (${backup.backupManga.length} 本漫画)`);
     } catch (err) {
-      alert("导出失败: " + err.message);
       logMessage("✕ 错误: " + err.message);
       setProgress("导出出错", 0);
+      notifyUser("copy2mihon 导出失败", err.message);
     }
   }
 
@@ -1048,12 +1207,12 @@
     const token = detectedToken || detectTokenFromStorage();
     if (!token) {
       alert("请先登录拷贝漫画，或点击【手动设置】输入您的 Token！");
+      e.target.value = '';
       return;
     }
 
-    const catName = document.getElementById('c2m-category-input')?.value || "拷贝漫画";
-    const logBox = document.getElementById('c2m-log-box');
-    if (logBox) { logBox.textContent = ''; logBox.style.display = 'none'; }
+    const catName = UI.categoryInput?.value || "拷贝漫画";
+    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
 
     try {
       setProgress("正在读取本地 .tachibk 文件...", 10);
@@ -1086,10 +1245,11 @@
       logMessage(`  - 更新书架: ${stats.updated_favorites} 本`);
       logMessage(`  - 标记已读: ${stats.chapters_marked_read} 话`);
       logMessage(`  - 更新历史: ${stats.updated_history} 条`);
+      notifyUser("copy2mihon 合并完成", `${outName}\n新增 ${stats.new_manga_added} 本, 标记已读 ${stats.chapters_marked_read} 话`);
     } catch (err) {
-      alert("合并失败: " + err.message);
       logMessage("✕ 错误: " + err.message);
       setProgress("合并出错", 0);
+      notifyUser("copy2mihon 合并失败", err.message);
     } finally {
       e.target.value = '';
     }
@@ -1097,10 +1257,26 @@
 
   // --- Initialize ---
   installNetworkHooks();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createUI);
-  } else {
+
+  function onInit() {
     createUI();
+    // Periodic Token Check on startup (in case storage or cookies took a moment to populate)
+    let pollCount = 0;
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      const tok = detectTokenFromStorage();
+      if (tok) {
+        updateTokenDisplay();
+        if (pollCount > 3) clearInterval(pollInterval);
+      }
+      if (pollCount >= 10) clearInterval(pollInterval);
+    }, 1000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onInit);
+  } else {
+    onInit();
   }
 
 })();
