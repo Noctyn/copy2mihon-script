@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.1
+// @version      0.3.2
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -1328,10 +1328,13 @@
   // Inject buttons into native CopyManga navbar and personal center
   function injectNativePageButtons() {
     // 1. Personal Center Header Banner (https://www.mangacopy.com/web/person/*)
-    const personHeader = document.querySelector('header, .el-header');
-    if (personHeader && !document.getElementById('c2m-person-header-actions')) {
-      const infoContainer = personHeader.querySelector('div');
-      if (infoContainer && (infoContainer.querySelector('.vavtar') || infoContainer.querySelector('section'))) {
+    const avatarEl = document.querySelector('header .vavtar, .vavtar, header .el-avatar, .el-avatar--square');
+    if (avatarEl && avatarEl.parentElement) {
+      const infoContainer = avatarEl.parentElement;
+      if (!infoContainer.querySelector('#c2m-person-header-actions')) {
+        // Clean up any stray actions appended elsewhere
+        document.querySelectorAll('#c2m-person-header-actions').forEach(el => el.remove());
+
         const actionSection = document.createElement('section');
         actionSection.id = 'c2m-person-header-actions';
         actionSection.className = 'c2m-person-header-actions';
