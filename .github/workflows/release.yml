@@ -1,0 +1,23 @@
+name: Release Userscript
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload Userscript to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/copy2mihon.user.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

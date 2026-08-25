@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+*.tachibk
+*.json
+!package.json
+!schema*.json
+.vscode/
+.idea/

@@ -1,0 +1,19 @@
+{
+  "name": "copy2mihon-script",
+  "version": "0.1.0",
+  "description": "Export CopyManga bookshelf and reading history to Mihon backup directly in your browser.",
+  "author": "Taffy",
+  "license": "MIT",
+  "keywords": [
+    "userscript",
+    "tampermonkey",
+    "copymanga",
+    "mihon",
+    "tachiyomi",
+    "tachibk"
+  ],
+  "devDependencies": {
+    "pako": "^3.0.1",
+    "protobufjs": "^8.7.2"
+  }
+}
