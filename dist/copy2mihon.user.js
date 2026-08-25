@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.2
+// @version      0.3.3
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -852,221 +852,155 @@
     downloadBlob(blob, filename);
   }
 
-  // --- UI Components & Styles (Native Embedded Style) ---
+  // --- UI Components & Styles (Pure Element UI Native Style) ---
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      /* Top Slim Progress Bar (YouTube/GitHub style) */
+      /* Top Slim Progress Bar (YouTube style) */
       #c2m-top-progress {
         position: fixed;
         top: 0;
         left: 0;
-        height: 2.5px;
+        height: 2px;
         width: 0%;
-        background: #0084ff;
+        background: #1790e6;
         z-index: 1000000;
         transition: width 0.25s ease, opacity 0.4s ease;
-        box-shadow: 0 0 8px rgba(0, 132, 255, 0.7);
         pointer-events: none;
       }
 
-      /* Native Nav Item / Action Button */
+      /* Personal Center Header Actions (Inside blue card below registration date) */
+      .c2m-person-header-actions {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .c2m-person-btn {
+        display: inline-block;
+        line-height: 1;
+        white-space: nowrap;
+        cursor: pointer;
+        background: #ffffff;
+        border: 1px solid #dcdfe6;
+        color: #1790e6;
+        -webkit-appearance: none;
+        text-align: center;
+        box-sizing: border-box;
+        outline: none;
+        margin: 0;
+        transition: .1s;
+        font-weight: 500;
+        padding: 7px 15px;
+        font-size: 12px;
+        border-radius: 4px;
+      }
+      .c2m-person-btn:hover {
+        background: #ecf5ff;
+        border-color: #c6e2ff;
+        color: #1790e6;
+      }
+      .c2m-person-btn-sub {
+        background: transparent;
+        border-color: #ffffff;
+        color: #ffffff;
+      }
+      .c2m-person-btn-sub:hover {
+        background: rgba(255, 255, 255, 0.15);
+        border-color: #ffffff;
+        color: #ffffff;
+      }
+
+      /* Native Nav Item */
       .c2m-native-nav-btn {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        padding: 5px 12px;
+        gap: 4px;
+        padding: 4px 10px;
         margin: 0 4px;
         font-size: 13.5px;
         font-weight: 500;
         color: inherit;
-        background: rgba(0, 132, 255, 0.1);
-        border: 1px solid rgba(0, 132, 255, 0.3);
-        border-radius: 6px;
+        background: transparent;
+        border: 1px solid #dcdfe6;
+        border-radius: 4px;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: all 0.15s ease;
         text-decoration: none;
         user-select: none;
         line-height: normal;
         vertical-align: middle;
       }
       .c2m-native-nav-btn:hover {
-        background: #0084ff;
-        color: #ffffff !important;
-        border-color: #0084ff;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 132, 255, 0.35);
-      }
-
-      /* Native Bookshelf Toolbar Button */
-      .c2m-bookshelf-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 14px;
-        margin-left: 10px;
-        font-size: 13px;
-        font-weight: 600;
-        color: #ffffff !important;
-        background: #0084ff;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        box-shadow: 0 2px 6px rgba(0, 132, 255, 0.25);
-      }
-      .c2m-bookshelf-btn:hover {
-        background: #0073e6;
-        box-shadow: 0 3px 10px rgba(0, 132, 255, 0.4);
-      }
-
-      /* Personal Center Header Actions (Red box area below registration date) */
-      .c2m-person-header-actions {
-        margin-top: 8px;
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .c2m-person-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 14px;
-        font-size: 12.5px;
-        font-weight: 500;
-        color: #ffffff !important;
-        background: rgba(255, 255, 255, 0.22);
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        text-decoration: none;
-        user-select: none;
-        line-height: 20px;
-        backdrop-filter: blur(4px);
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-      }
-      .c2m-person-btn:hover {
-        background: #ffffff;
         color: #1790e6 !important;
-        border-color: #ffffff;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
-      }
-      .c2m-person-btn-sub {
-        background: rgba(255, 255, 255, 0.14);
-        border-color: rgba(255, 255, 255, 0.4);
-      }
-      .c2m-person-btn-sub:hover {
-        background: #ffffff;
-        color: #059669 !important;
-        border-color: #ffffff;
+        border-color: #1790e6;
+        background: #ecf5ff;
       }
 
-      /* Modal Overlay */
+      /* Modal Overlay (Element UI dialog wrapper) */
       #c2m-modal-overlay {
         position: fixed;
         top: 0;
         left: 0;
         width: 100vw;
         height: 100vh;
-        background: rgba(0, 0, 0, 0.55);
+        background: rgba(0, 0, 0, 0.5);
         display: none;
         align-items: center;
         justify-content: center;
         z-index: 999999;
-        backdrop-filter: blur(4px);
-        animation: c2m-fade-in 0.18s ease-out;
-      }
-      @keyframes c2m-fade-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
       }
 
-      /* Modal Card */
+      /* Modal Card (Element UI dialog) */
       #c2m-modal-card {
-        width: 420px;
-        max-width: 92vw;
+        position: relative;
+        margin: 0 auto;
         background: #ffffff;
-        color: #2c3e50;
-        border-radius: 12px;
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
-        border: 1px solid #e2e8f0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        overflow: hidden;
-        animation: c2m-zoom-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-      }
-      @keyframes c2m-zoom-in {
-        from { opacity: 0; transform: scale(0.95) translateY(8px); }
-        to { opacity: 1; transform: scale(1) translateY(0); }
-      }
-
-      /* Dark Theme Support */
-      @media (prefers-color-scheme: dark) {
-        #c2m-modal-card {
-          background: #1f2026;
-          color: #e2e8f0;
-          border-color: #333642;
-          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-        }
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        box-sizing: border-box;
+        width: 440px;
+        max-width: 92vw;
+        font-family: inherit;
       }
 
       .c2m-modal-header {
-        padding: 16px 20px;
-        border-bottom: 1px solid #edf2f7;
+        padding: 20px 20px 10px;
         display: flex;
         align-items: center;
         justify-content: space-between;
       }
-      @media (prefers-color-scheme: dark) {
-        .c2m-modal-header { border-bottom-color: #2d313d; }
-      }
       .c2m-modal-title {
-        font-size: 15.5px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        line-height: 24px;
+        font-size: 18px;
+        color: #303133;
+        font-weight: 500;
       }
       .c2m-close-btn {
-        font-size: 18px;
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        outline: none;
         cursor: pointer;
-        color: #94a3b8;
-        padding: 2px 6px;
-        border-radius: 6px;
-        transition: all 0.15s ease;
+        font-size: 16px;
+        color: #909399;
       }
       .c2m-close-btn:hover {
-        background: rgba(0, 0, 0, 0.06);
-        color: #ef4444;
+        color: #1790e6;
       }
 
       .c2m-modal-body {
-        padding: 20px;
+        padding: 15px 20px 25px;
+        color: #606266;
+        font-size: 14px;
         display: flex;
         flex-direction: column;
         gap: 14px;
       }
-
-      .c2m-token-bar {
-        font-size: 12px;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      @media (prefers-color-scheme: dark) {
-        .c2m-token-bar {
-          background: #282a33;
-          border-color: #383b47;
-        }
-      }
-      .c2m-token-green { color: #10b981; font-weight: 600; }
-      .c2m-token-red { color: #ef4444; font-weight: 600; }
 
       .c2m-btn-grid {
         display: grid;
@@ -1074,72 +1008,90 @@
         gap: 10px;
       }
       .c2m-btn {
-        padding: 10px 14px;
-        border-radius: 8px;
-        font-size: 13px;
-        font-weight: 600;
+        display: inline-block;
+        line-height: 1;
+        white-space: nowrap;
         cursor: pointer;
-        border: 1px solid transparent;
-        transition: all 0.15s ease;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        user-select: none;
+        background: #ffffff;
+        border: 1px solid #dcdfe6;
+        color: #606266;
+        text-align: center;
+        box-sizing: border-box;
+        outline: none;
+        margin: 0;
+        transition: .1s;
+        font-weight: 500;
+        padding: 10px 18px;
+        font-size: 13.5px;
+        border-radius: 4px;
       }
       .c2m-btn:disabled {
         opacity: 0.6;
         cursor: not-allowed;
       }
-      .c2m-btn-full { grid-column: span 2; }
+      .c2m-btn-full {
+        grid-column: span 2;
+      }
       
       .c2m-btn-main {
-        background: #0084ff;
-        color: white;
+        color: #ffffff;
+        background-color: #1790e6;
+        border-color: #1790e6;
       }
-      .c2m-btn-main:hover:not(:disabled) { background: #0073e6; }
+      .c2m-btn-main:hover:not(:disabled) {
+        background: #3b9fe9;
+        border-color: #3b9fe9;
+        color: #ffffff;
+      }
 
       .c2m-btn-sub {
-        background: #f1f5f9;
-        color: #334155;
-        border-color: #e2e8f0;
+        background: #ffffff;
+        border-color: #dcdfe6;
+        color: #606266;
       }
       .c2m-btn-sub:hover:not(:disabled) {
-        background: #e2e8f0;
-      }
-      @media (prefers-color-scheme: dark) {
-        .c2m-btn-sub {
-          background: #282a33;
-          color: #cbd5e1;
-          border-color: #383b47;
-        }
-        .c2m-btn-sub:hover:not(:disabled) { background: #333644; }
+        color: #1790e6;
+        border-color: #c6e2ff;
+        background-color: #ecf5ff;
       }
 
       .c2m-btn-emerald {
-        background: #059669;
-        color: white;
+        color: #ffffff;
+        background-color: #67c23a;
+        border-color: #67c23a;
       }
-      .c2m-btn-emerald:hover:not(:disabled) { background: #047857; }
+      .c2m-btn-emerald:hover:not(:disabled) {
+        background: #85ce61;
+        border-color: #85ce61;
+        color: #ffffff;
+      }
 
       .c2m-opt-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        font-size: 12.5px;
-        color: #64748b;
+        font-size: 13px;
+        color: #606266;
+        margin-top: 4px;
       }
       .c2m-text-input {
-        padding: 5px 10px;
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        font-size: 12px;
-        width: 120px;
-        background: inherit;
-        color: inherit;
+        -webkit-appearance: none;
+        background-color: #ffffff;
+        border-radius: 4px;
+        border: 1px solid #dcdfe6;
+        box-sizing: border-box;
+        color: #606266;
+        display: inline-block;
+        font-size: inherit;
+        height: 32px;
+        line-height: 32px;
+        outline: none;
+        padding: 0 12px;
+        transition: border-color .2s cubic-bezier(.645,.045,.355,1);
+        width: 140px;
       }
-      @media (prefers-color-scheme: dark) {
-        .c2m-text-input { border-color: #475569; }
+      .c2m-text-input:focus {
+        border-color: #1790e6;
       }
 
       .c2m-progress-panel {
@@ -1150,45 +1102,43 @@
       }
       .c2m-meter-bg {
         height: 6px;
-        background: #e2e8f0;
-        border-radius: 999px;
+        background: #ebeef5;
+        border-radius: 100px;
         overflow: hidden;
-      }
-      @media (prefers-color-scheme: dark) {
-        .c2m-meter-bg { background: #333644; }
+        position: relative;
+        vertical-align: middle;
       }
       .c2m-meter-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
         height: 100%;
-        width: 0%;
-        background: #0084ff;
-        transition: width 0.2s ease;
+        background-color: #1790e6;
+        text-align: right;
+        border-radius: 100px;
+        line-height: 1;
+        white-space: nowrap;
+        transition: width .3s ease;
       }
       .c2m-progress-info {
         font-size: 12px;
-        color: #64748b;
+        color: #909399;
         display: flex;
         justify-content: space-between;
       }
 
       .c2m-log-terminal {
-        font-size: 11.5px;
-        color: #64748b;
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
+        font-size: 12px;
+        color: #606266;
+        background: #f5f7fa;
+        border: 1px solid #e4e7ed;
+        border-radius: 4px;
         padding: 10px;
         max-height: 90px;
         overflow-y: auto;
         white-space: pre-wrap;
         word-break: break-all;
         display: none;
-      }
-      @media (prefers-color-scheme: dark) {
-        .c2m-log-terminal {
-          background: #191a1f;
-          border-color: #2d313d;
-          color: #94a3b8;
-        }
       }
     `;
     document.head.appendChild(style);
@@ -1199,7 +1149,6 @@
   function openModal() {
     if (UI.overlay) {
       UI.overlay.style.display = 'flex';
-      updateTokenDisplay();
     }
   }
 
@@ -1219,21 +1168,16 @@
     topProgress.id = 'c2m-top-progress';
     document.body.appendChild(topProgress);
 
-    // Centered Modal Dialog
+    // Centered Modal Dialog (Element UI dialog)
     const overlay = document.createElement('div');
     overlay.id = 'c2m-modal-overlay';
     overlay.innerHTML = `
       <div id="c2m-modal-card">
         <div class="c2m-modal-header">
-          <div class="c2m-modal-title">📦 拷贝漫画 → Mihon 备份工具</div>
-          <div class="c2m-close-btn" id="c2m-close-modal">✕</div>
+          <div class="c2m-modal-title">导出至 Mihon 备份</div>
+          <button type="button" class="c2m-close-btn" id="c2m-close-modal">✕</button>
         </div>
         <div class="c2m-modal-body">
-          <div class="c2m-token-bar">
-            <span id="c2m-token-status">正在检测登录态...</span>
-            <a href="javascript:void(0)" id="c2m-set-token-btn" style="color:#0084ff;font-size:12px;text-decoration:none;">手动设置</a>
-          </div>
-
           <div class="c2m-btn-grid">
             <button class="c2m-btn c2m-btn-main c2m-btn-full" id="c2m-export-all">
               ⚡ 一键导出全部 (书架 + 历史)
@@ -1270,7 +1214,6 @@
     // Cache refs
     UI.topProgress = topProgress;
     UI.overlay = overlay;
-    UI.tokenStatus = document.getElementById('c2m-token-status');
     UI.exportAllBtn = document.getElementById('c2m-export-all');
     UI.exportSubsBtn = document.getElementById('c2m-export-subs');
     UI.exportHistBtn = document.getElementById('c2m-export-hist');
@@ -1295,16 +1238,6 @@
       }
     });
 
-    document.getElementById('c2m-set-token-btn').addEventListener('click', () => {
-      const current = detectedToken || "";
-      const input = prompt("请输入拷贝漫画 Token (或 Authorization 头):", current);
-      if (input !== null) {
-        detectedToken = cleanToken(input);
-        localStorage.setItem(STORAGE_KEY_TOKEN, detectedToken);
-        updateTokenDisplay();
-      }
-    });
-
     UI.exportAllBtn.addEventListener('click', () => runExportPipeline(true, true));
     UI.exportSubsBtn.addEventListener('click', () => runExportPipeline(true, false));
     UI.exportHistBtn.addEventListener('click', () => runExportPipeline(false, true));
@@ -1314,15 +1247,13 @@
 
     // Register Native Menu Commands in Tampermonkey
     if (typeof GM_registerMenuCommand === 'function') {
-      GM_registerMenuCommand("📦 打开 copy2mihon 面板", openModal);
+      GM_registerMenuCommand("📦 打开 copy2mihon 导出面板", openModal);
       GM_registerMenuCommand("⚡ 一键导出完整备份", () => { openModal(); runExportPipeline(true, true); });
       GM_registerMenuCommand("🔄 合并本地 .tachibk 备份", () => { openModal(); UI.fileInput.click(); });
     }
 
     // Try injecting native buttons into page navbar and bookshelf
     injectNativePageButtons();
-
-    updateTokenDisplay();
   }
 
   // Inject buttons into native CopyManga navbar and personal center
@@ -1435,7 +1366,7 @@
   async function runExportPipeline(includeSubs, includeHist) {
     const token = detectedToken || detectTokenFromStorage();
     if (!token) {
-      alert("请先登录拷贝漫画，或点击【手动设置】输入您的 Token！");
+      alert("未检测到登录信息，请先在当前网站登录账号后再导出！");
       return;
     }
 
@@ -1487,7 +1418,7 @@
 
     const token = detectedToken || detectTokenFromStorage();
     if (!token) {
-      alert("请先登录拷贝漫画，或点击【手动设置】输入您的 Token！");
+      alert("未检测到登录信息，请先在当前网站登录账号后再导出！");
       e.target.value = '';
       return;
     }
@@ -1542,15 +1473,11 @@
   function onInit() {
     createUI();
 
-    // Periodic Token Check on startup (in case storage or cookies took a moment to populate)
+    // Periodic check on startup
     let pollCount = 0;
     const pollInterval = setInterval(() => {
       pollCount++;
-      const tok = detectTokenFromStorage();
-      if (tok) {
-        updateTokenDisplay();
-        if (pollCount > 3) clearInterval(pollInterval);
-      }
+      detectTokenFromStorage();
       injectNativePageButtons();
       if (pollCount >= 15) clearInterval(pollInterval);
     }, 1000);
@@ -1563,7 +1490,6 @@
         debounceTimer = null;
         injectNativePageButtons();
         detectTokenFromStorage();
-        updateTokenDisplay();
       }, 200);
     });
     observer.observe(document.body, { childList: true, subtree: true });
