@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.3.6
+// @version      0.3.7
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -23,20 +23,6 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-/*
- * v0.2.0 优化说明:
- * 1. 分页拉取改为有限并发 (默认 3 路)，大幅缩短大书架/长历史的导出时间。
- * 2. 抽取 makeMangaRecord / makeChapterRecord 公共构造函数，消除 convert/merge 中的重复对象字面量。
- * 3. memo 空对象字节仅编码一次并复用引用，减少大量 TextEncoder 调用与内存分配。
- * 4. 合并阶段为每本漫画的章节建立 Map 索引 (按 URL 精确匹配 + 按章节号回退)，
- *    避免历史记录条目对章节列表做重复线性扫描，同时修复了原 `.includes()` 子串匹配可能误配的问题。
- * 5. fallback 章节号解析优先匹配"第X话/回/集"模式，避免把卷号误认成话数。
- * 6. 无 path_word 时的兜底哈希键先做乱码修复 + 归一化，提升书架条目与历史条目匹配到同一部漫画的概率。
- * 7. fetchWithRetry 增加请求超时 (AbortController) 与带抖动的指数退避，429 重试更平滑。
- * 8. 下载优先使用 GM_download（绕过部分站点的 CSP 限制），失败时自动回退到原有的 blob+a 标签方式。
- * 9. 面板 DOM 引用集中缓存，避免高频进度更新时反复 querySelector；并防止脚本在 SPA 场景下重复注入面板。
- * 10. 关键参数集中到 CONFIG，方便按需调整并发数、超时时间、分页大小等。
- */
 
 (function () {
   'use strict';
@@ -184,7 +170,7 @@
   function detectTokenFromCookie() {
     try {
       const docCookie = (typeof document !== 'undefined' ? document.cookie : '') ||
-                        (typeof unsafeWindow !== 'undefined' && unsafeWindow.document ? unsafeWindow.document.cookie : '');
+        (typeof unsafeWindow !== 'undefined' && unsafeWindow.document ? unsafeWindow.document.cookie : '');
       if (docCookie) {
         // Matches token=xxx, authorization=xxx, auth=xxx, etc.
         const match = docCookie.match(/(?:^|;\s*)(?:token|authorization|auth|copy_token|member_token)=([^;]+)/i);
@@ -193,7 +179,7 @@
           if (cleaned.length >= 20) return cleaned;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
     return '';
   }
 
@@ -231,7 +217,7 @@
               return detectedToken;
             }
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Check vuex / pinia in localStorage
@@ -245,7 +231,7 @@
             return detectedToken;
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // 4. Try GM_cookie if available in extension
@@ -256,11 +242,10 @@
             const tok = cleanToken(cookies[0].value);
             if (tok.length >= 20 && tok !== detectedToken) {
               detectedToken = tok;
-              updateTokenDisplay();
             }
           }
         });
-      } catch (_) {}
+      } catch (_) { }
     }
 
     return "";
@@ -284,7 +269,6 @@
                 const tok = cleanToken(value);
                 if (tok && tok.length >= 20 && tok !== detectedToken) {
                   detectedToken = tok;
-                  updateTokenDisplay();
                 }
               }
               return origSetHeader.apply(this, arguments);
@@ -306,7 +290,6 @@
                 const tok = cleanToken(authHeader);
                 if (tok && tok.length >= 20 && tok !== detectedToken) {
                   detectedToken = tok;
-                  updateTokenDisplay();
                 }
               }
             }
@@ -315,7 +298,7 @@
           hookedFetch._c2m_hooked = true;
           win.fetch = hookedFetch;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -703,7 +686,10 @@
           m.favorite = true;
           stats.updated_favorites++;
         }
-        // Preserve user's existing category assignment for manga already in Mihon
+        if (targetCatOrder !== null && !(m.categories || []).includes(targetCatOrder)) {
+          m.categories = m.categories || [];
+          m.categories.push(targetCatOrder);
+        }
       } else {
         const { title, author, cover, status } = deriveComicFields(comic);
         const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
