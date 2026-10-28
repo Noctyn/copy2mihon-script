@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.4.1
+// @version      0.5.0
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -11,7 +11,7 @@
 // @match        *://*.copymanga.site/*
 // @match        *://*.copymanga.org/*
 // @match        *://*.copymanga.com/*
-// @require      https://cdn.jsdelivr.net/npm/long@5.2.3/dist/long.js
+// @require      https://cdn.jsdelivr.net/npm/long@5.2.3/umd/index.js
 // @require      https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js
 // @require      https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js
 // @grant        GM_download
@@ -1083,11 +1083,14 @@
     downloadBlob(blob, filename);
   }
 
-  // --- UI Components & Styles (Pure Element UI Native Style) ---
+  // --- UI Components & Styles ---
+  const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
+  const ICON_ALERT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></svg>`;
+
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      /* Top Slim Progress Bar (YouTube style) */
+      /* Top slim progress bar */
       #c2m-top-progress {
         position: fixed;
         top: 0;
@@ -1100,7 +1103,7 @@
         pointer-events: none;
       }
 
-      /* Personal Center Header Actions (Inside blue card below registration date) */
+      /* Personal center entry */
       .c2m-person-header-actions {
         margin-top: 10px;
         display: flex;
@@ -1109,294 +1112,602 @@
         flex-wrap: wrap;
       }
       .c2m-person-btn {
-        display: inline-block;
-        line-height: 1;
-        white-space: nowrap;
-        cursor: pointer;
+        height: 30px;
+        padding: 0 14px;
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        border-radius: 6px;
         background: #ffffff;
-        border: 1px solid #dcdfe6;
-        color: #1790e6;
-        -webkit-appearance: none;
-        text-align: center;
-        box-sizing: border-box;
-        outline: none;
-        margin: 0;
-        transition: .1s;
+        color: #0d75c2;
+        font-family: inherit;
+        font-size: 12.5px;
         font-weight: 500;
-        padding: 7px 15px;
-        font-size: 12px;
-        border-radius: 4px;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
       }
       .c2m-person-btn:hover {
-        background: #ecf5ff;
-        border-color: #c6e2ff;
-        color: #1790e6;
-      }
-      .c2m-person-btn-sub {
-        background: transparent;
+        background: #eaf5fd;
         border-color: #ffffff;
-        color: #ffffff;
+        color: #0b66ab;
       }
-      .c2m-person-btn-sub:hover {
-        background: rgba(255, 255, 255, 0.15);
-        border-color: #ffffff;
-        color: #ffffff;
+      .c2m-person-btn:focus-visible {
+        outline: 2px solid #0d75c2;
+        outline-offset: 2px;
       }
 
-      /* Native Nav Item */
-      .c2m-native-nav-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 10px;
-        margin: 0 4px;
-        font-size: 13.5px;
-        font-weight: 500;
-        color: inherit;
-        background: transparent;
-        border: 1px solid #dcdfe6;
-        border-radius: 4px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        text-decoration: none;
-        user-select: none;
-        line-height: normal;
-        vertical-align: middle;
-      }
-      .c2m-native-nav-btn:hover {
-        color: #1790e6 !important;
-        border-color: #1790e6;
-        background: #ecf5ff;
-      }
-
-      /* Modal Overlay (Element UI dialog wrapper) */
+      /* Overlay */
       #c2m-modal-overlay {
         position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background: rgba(0, 0, 0, 0.5);
+        inset: 0;
         display: none;
         align-items: center;
         justify-content: center;
+        padding: 24px;
+        background: rgba(16, 24, 40, 0.52);
         z-index: 999999;
       }
+      #c2m-modal-overlay[data-open="true"] {
+        display: flex;
+        animation: c2m-fade 160ms ease-out;
+      }
 
-      /* Modal Card (Element UI dialog) */
+      /* Dialog */
       #c2m-modal-card {
+        --c2m-primary: #0d75c2;
+        --c2m-primary-strong: #0b66ab;
+        --c2m-text: #1f2329;
+        --c2m-text-2: #5b6472;
+        --c2m-text-3: #6b7280;
+        --c2m-border: #e2e7ee;
+        --c2m-surface-2: #f7f9fc;
         position: relative;
-        margin: 0 auto;
+        width: 500px;
+        max-width: 100%;
+        max-height: calc(100vh - 48px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
         background: #ffffff;
-        border-radius: 4px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        box-sizing: border-box;
-        width: 440px;
-        max-width: 92vw;
+        border-radius: 14px;
+        box-shadow: 0 24px 64px rgba(16, 24, 40, 0.28), 0 2px 8px rgba(16, 24, 40, 0.08);
+        color: var(--c2m-text);
         font-family: inherit;
+        animation: c2m-rise 180ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      #c2m-modal-card *,
+      #c2m-modal-card *::before,
+      #c2m-modal-card *::after { box-sizing: border-box; }
+      #c2m-modal-card h2,
+      #c2m-modal-card h3,
+      #c2m-modal-card p {
+        margin: 0;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+      }
+      #c2m-modal-card ::-webkit-scrollbar { width: 10px; }
+      #c2m-modal-card ::-webkit-scrollbar-thumb {
+        background: #dbe2ea;
+        border-radius: 999px;
+        border: 3px solid #ffffff;
+      }
+      #c2m-modal-card :focus-visible {
+        outline: 2px solid var(--c2m-primary);
+        outline-offset: 2px;
       }
 
       .c2m-modal-header {
-        padding: 20px 20px 10px;
+        padding: 20px 24px 0;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
+        gap: 16px;
       }
       .c2m-modal-title {
+        font-size: 17px;
         line-height: 24px;
-        font-size: 18px;
-        color: #303133;
-        font-weight: 500;
+        font-weight: 600;
+        color: var(--c2m-text);
+      }
+      .c2m-modal-subtitle {
+        margin-top: 3px;
+        font-size: 12.5px;
+        line-height: 18px;
+        color: var(--c2m-text-3);
       }
       .c2m-close-btn {
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        padding: 0;
-        background: transparent;
+        flex: none;
+        width: 30px;
+        height: 30px;
+        margin: -4px -6px 0 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         border: none;
-        outline: none;
+        border-radius: 8px;
+        background: transparent;
+        color: #8a93a1;
         cursor: pointer;
-        font-size: 16px;
-        color: #909399;
+        transition: background 0.15s ease, color 0.15s ease;
       }
-      .c2m-close-btn:hover {
-        color: #1790e6;
-      }
-
+      .c2m-close-btn:hover { background: #f1f4f8; color: var(--c2m-text); }
       .c2m-modal-body {
-        padding: 15px 20px 25px;
-        color: #606266;
-        font-size: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
+        padding: 6px 24px 22px;
+        overflow-y: auto;
       }
+      .c2m-view[hidden] { display: none !important; }
 
-      .c2m-btn-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+      /* Idle view */
+      .c2m-auth {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 2px 0 4px;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--c2m-text-2);
+      }
+      .c2m-auth-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #9aa3b2;
+      }
+      .c2m-auth[data-state="ok"] .c2m-auth-dot { background: #2f9e44; }
+      .c2m-auth[data-state="warn"] .c2m-auth-dot { background: #e6a23c; }
+      .c2m-auth[data-state="warn"] { color: #8a5300; }
+
+      .c2m-alert {
+        display: flex;
+        gap: 8px;
+        padding: 10px 12px;
+        margin: 6px 0 10px;
+        border: 1px solid #f2d3a8;
+        border-radius: 8px;
+        background: #fdf6ec;
+        color: #8a5300;
+        font-size: 12.5px;
+        line-height: 18px;
+      }
+      .c2m-alert[hidden] { display: none; }
+
+      .c2m-section {
+        padding: 16px 0;
+        border-top: 1px solid #eef1f5;
+      }
+      .c2m-section:first-of-type { border-top: none; padding-top: 10px; }
+      .c2m-section-head {
+        display: flex;
+        align-items: flex-start;
         gap: 10px;
       }
+      .c2m-section-icon {
+        flex: none;
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: #eaf5fd;
+        color: #0d75c2;
+      }
+      .c2m-section-icon svg { width: 16px; height: 16px; }
+      .c2m-section-title {
+        font-size: 13.5px;
+        line-height: 20px;
+        font-weight: 600;
+        color: var(--c2m-text);
+      }
+      .c2m-section-desc {
+        margin-top: 2px;
+        font-size: 12.5px;
+        line-height: 18px;
+        color: var(--c2m-text-3);
+      }
+      .c2m-section-body { margin-top: 12px; }
+
+      .c2m-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
       .c2m-btn {
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 40px;
+        padding: 0 16px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 13.5px;
+        font-weight: 500;
         line-height: 1;
         white-space: nowrap;
         cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      }
+      .c2m-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .c2m-btn-primary {
+        background: var(--c2m-primary);
+        color: #ffffff;
+      }
+      .c2m-btn-primary:hover:not(:disabled) { background: var(--c2m-primary-strong); }
+      .c2m-btn-ghost {
         background: #ffffff;
-        border: 1px solid #dcdfe6;
-        color: #606266;
-        text-align: center;
-        box-sizing: border-box;
-        outline: none;
-        margin: 0;
-        transition: .1s;
-        font-weight: 500;
-        padding: 10px 18px;
-        font-size: 13.5px;
-        border-radius: 4px;
+        border-color: #d7dde6;
+        color: #3c4450;
       }
-      .c2m-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
+      .c2m-btn-ghost:hover:not(:disabled) {
+        border-color: #9ecdf0;
+        background: #f4faff;
+        color: #0b66ab;
       }
-      .c2m-btn-full {
-        grid-column: span 2;
-      }
-      
-      .c2m-btn-main {
-        color: #ffffff;
-        background-color: #1790e6;
-        border-color: #1790e6;
-      }
-      .c2m-btn-main:hover:not(:disabled) {
-        background: #3b9fe9;
-        border-color: #3b9fe9;
-        color: #ffffff;
-      }
+      .c2m-btn-block { width: 100%; }
+      .c2m-actions .c2m-btn-primary { flex: 1 1 180px; }
 
-      .c2m-btn-sub {
-        background: #ffffff;
-        border-color: #dcdfe6;
-        color: #606266;
-      }
-      .c2m-btn-sub:hover:not(:disabled) {
-        color: #1790e6;
-        border-color: #c6e2ff;
-        background-color: #ecf5ff;
-      }
-
-      .c2m-btn-emerald {
-        color: #ffffff;
-        background-color: #67c23a;
-        border-color: #67c23a;
-      }
-      .c2m-btn-emerald:hover:not(:disabled) {
-        background: #85ce61;
-        border-color: #85ce61;
-        color: #ffffff;
-      }
-
-      .c2m-btn-orange {
-        color: #ffffff;
-        background-color: #e6a23c;
-        border-color: #e6a23c;
-      }
-      .c2m-btn-orange:hover:not(:disabled) {
-        background: #ebb563;
-        border-color: #ebb563;
-        color: #ffffff;
-      }
-
-      .c2m-opt-row {
+      .c2m-field {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        font-size: 13px;
-        color: #606266;
-        margin-top: 4px;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .c2m-field-label {
+        flex: none;
+        font-size: 12.5px;
+        color: var(--c2m-text-2);
       }
       .c2m-text-input {
-        -webkit-appearance: none;
-        background-color: #ffffff;
-        border-radius: 4px;
-        border: 1px solid #dcdfe6;
-        box-sizing: border-box;
-        color: #606266;
-        display: inline-block;
-        font-size: inherit;
-        height: 32px;
-        line-height: 32px;
-        outline: none;
+        flex: 1;
+        min-width: 0;
+        height: 36px;
         padding: 0 12px;
-        transition: border-color .2s cubic-bezier(.645,.045,.355,1);
-        width: 140px;
+        border: 1px solid #d7dde6;
+        border-radius: 8px;
+        background: #ffffff;
+        color: var(--c2m-text);
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
       }
+      .c2m-text-input::placeholder { color: #6b7280; }
       .c2m-text-input:focus {
-        border-color: #1790e6;
+        border-color: var(--c2m-primary);
+        box-shadow: 0 0 0 3px rgba(13, 117, 194, 0.16);
+      }
+      .c2m-hint {
+        margin-top: 6px;
+        font-size: 11.5px;
+        line-height: 17px;
+        color: var(--c2m-text-3);
+      }
+      .c2m-footnote {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid #eef1f5;
+        font-size: 11.5px;
+        line-height: 17px;
+        color: var(--c2m-text-3);
       }
 
-      .c2m-progress-panel {
-        display: none;
-        flex-direction: column;
-        gap: 6px;
-        margin-top: 4px;
+      /* Running view */
+      .c2m-run-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 16px 0 10px;
+      }
+      .c2m-run-title {
+        font-size: 14.5px;
+        font-weight: 600;
+        color: var(--c2m-text);
+      }
+      .c2m-run-percent {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--c2m-primary);
+        font-variant-numeric: tabular-nums;
       }
       .c2m-meter-bg {
-        height: 6px;
-        background: #ebeef5;
-        border-radius: 100px;
+        height: 8px;
+        border-radius: 999px;
+        background: #edf1f6;
         overflow: hidden;
-        position: relative;
-        vertical-align: middle;
       }
       .c2m-meter-fill {
-        position: absolute;
-        left: 0;
-        top: 0;
+        width: 0;
         height: 100%;
-        background-color: #1790e6;
-        text-align: right;
-        border-radius: 100px;
-        line-height: 1;
-        white-space: nowrap;
-        transition: width .3s ease;
+        border-radius: 999px;
+        background: var(--c2m-primary);
+        transition: width 0.25s ease;
       }
-      .c2m-progress-info {
-        font-size: 12px;
-        color: #909399;
-        display: flex;
-        justify-content: space-between;
+      .c2m-run-step {
+        min-height: 18px;
+        margin-top: 10px;
+        font-size: 12.5px;
+        line-height: 18px;
+        color: var(--c2m-text-2);
       }
-
-      .c2m-log-terminal {
-        font-size: 12px;
-        color: #606266;
-        background: #f5f7fa;
-        border: 1px solid #e4e7ed;
-        border-radius: 4px;
-        padding: 10px;
-        max-height: 90px;
+      .c2m-log {
+        display: none;
+        margin-top: 14px;
+        padding: 10px 12px;
+        max-height: 150px;
         overflow-y: auto;
+        border: 1px solid #edf1f6;
+        border-radius: 10px;
+        background: #f8fafc;
+        color: #4b5563;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11.5px;
+        line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-all;
-        display: none;
+      }
+      .c2m-log[data-visible="true"] { display: block; }
+      .c2m-run-note {
+        margin-top: 10px;
+        font-size: 11.5px;
+        line-height: 17px;
+        color: var(--c2m-text-3);
+        text-align: right;
+      }
+
+      /* Result view */
+      .c2m-result { padding-top: 18px; text-align: center; }
+      .c2m-result-icon {
+        width: 44px;
+        height: 44px;
+        margin: 0 auto 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+      }
+      .c2m-result[data-kind="success"] .c2m-result-icon { background: #e9f7ef; color: #2f9e44; }
+      .c2m-result[data-kind="error"] .c2m-result-icon { background: #fdecea; color: #d9480f; }
+      .c2m-result-icon svg { width: 22px; height: 22px; }
+      .c2m-result-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--c2m-text);
+      }
+      .c2m-result-msg {
+        margin-top: 6px;
+        font-size: 12.5px;
+        line-height: 18px;
+        color: var(--c2m-text-2);
+        word-break: break-all;
+      }
+      .c2m-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+        gap: 8px;
+        margin-top: 14px;
+        text-align: left;
+      }
+      .c2m-stat {
+        padding: 8px 10px;
+        border: 1px solid #eef1f5;
+        border-radius: 8px;
+        background: var(--c2m-surface-2);
+      }
+      .c2m-stat-label {
+        font-size: 11px;
+        line-height: 16px;
+        color: var(--c2m-text-3);
+      }
+      .c2m-stat-value {
+        margin-top: 2px;
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 20px;
+        color: var(--c2m-text);
+        font-variant-numeric: tabular-nums;
+      }
+      .c2m-result-hint {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--c2m-text-3);
+        text-align: left;
+      }
+      .c2m-result-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      @keyframes c2m-fade { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes c2m-rise {
+        from { opacity: 0; transform: translateY(8px) scale(0.995); }
+        to { opacity: 1; transform: none; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #c2m-modal-overlay[data-open="true"],
+        #c2m-modal-card { animation: none; }
+        #c2m-modal-card *,
+        #c2m-top-progress { transition: none !important; }
+      }
+      @media (max-width: 520px) {
+        #c2m-modal-overlay { padding: 0; align-items: flex-end; }
+        #c2m-modal-card {
+          width: 100%;
+          max-height: 90vh;
+          border-radius: 14px 14px 0 0;
+        }
+        .c2m-modal-header { padding: 18px 18px 0; }
+        .c2m-modal-body { padding: 4px 18px 18px; }
+        .c2m-actions .c2m-btn-primary { flex: 1 1 100%; }
+        .c2m-actions .c2m-btn-ghost { flex: 1 1 0; }
       }
     `;
     document.head.appendChild(style);
   }
 
   const UI = {};
+  let taskBusy = false;
+  let lastTask = null;
+  let lastFocused = null;
+  let currentView = "idle";
+
+  function setView(view) {
+    currentView = view;
+    UI.idleView.hidden = view !== "idle";
+    UI.runView.hidden = view !== "running";
+    UI.resultView.hidden = view !== "result";
+    UI.card.setAttribute("aria-busy", view === "running" ? "true" : "false");
+  }
+
+  function updateAuthStatus() {
+    if (!UI.authStatus || !UI.authText) return;
+    const token = detectedToken || detectTokenFromStorage();
+    const loggedIn = !!document.querySelector('header a[href="/web/person"], .header-input .username');
+    const ok = !!(token && token.length >= 20) || loggedIn;
+    UI.authStatus.dataset.state = ok ? "ok" : "warn";
+    UI.authText.textContent = token && token.length >= 20
+      ? "已检测到登录状态"
+      : (loggedIn ? "已登录" : "未登录，请先登录后再操作");
+    if (ok) UI.authError.hidden = true;
+  }
+
+  function showAuthError(message) {
+    if (!UI.authError) return;
+    UI.authError.textContent = message;
+    UI.authError.hidden = false;
+    UI.authError.scrollIntoView({ block: "nearest" });
+  }
+
+  function ensureToken() {
+    const token = detectedToken || detectTokenFromStorage();
+    if (token && token.length >= 20) return token;
+    updateAuthStatus();
+    showAuthError("未检测到登录信息。请先在拷贝漫画登录，然后刷新页面再试。");
+    return "";
+  }
 
   function openModal() {
-    if (UI.overlay) {
-      UI.overlay.style.display = 'flex';
-    }
+    if (!UI.overlay) return;
+    lastFocused = document.activeElement;
+    UI.overlay.dataset.open = "true";
+    updateAuthStatus();
+    if (currentView === "idle") UI.exportAllBtn.focus();
+    else if (currentView === "result") UI.resultPrimary.focus();
+    else if (currentView === "running") UI.closeBtn.focus();
   }
 
   function closeModal() {
-    if (UI.overlay) {
-      UI.overlay.style.display = 'none';
+    if (!UI.overlay) return;
+    UI.overlay.dataset.open = "false";
+    if (!taskBusy && currentView === "result") resetToIdle();
+    if (lastFocused && lastFocused.isConnected) {
+      try { lastFocused.focus(); } catch (_) { }
+    }
+    lastFocused = null;
+  }
+
+  function resetToIdle() {
+    if (taskBusy) return;
+    setView("idle");
+    if (UI.authError) UI.authError.hidden = true;
+    updateAuthStatus();
+  }
+
+  function beginTask(title) {
+    setView("running");
+    UI.runTitle.textContent = title;
+    UI.progressFill.style.width = "0%";
+    UI.progressMsg.textContent = "准备中…";
+    UI.progressCount.textContent = "0%";
+    UI.logBox.textContent = "";
+    UI.logBox.dataset.visible = "false";
+    UI.authError.hidden = true;
+    UI.topProgress.style.opacity = "0";
+    UI.topProgress.style.width = "0%";
+  }
+
+  function showResult(result) {
+    setView("result");
+    UI.resultView.dataset.kind = result.kind;
+    UI.resultIcon.innerHTML = result.kind === "success" ? ICON_CHECK : ICON_ALERT;
+    UI.resultTitle.textContent = result.title || "";
+    UI.resultMsg.textContent = result.message || "";
+    UI.resultHint.textContent = result.hint || "";
+    UI.resultHint.hidden = !result.hint;
+
+    UI.resultStats.textContent = "";
+    const stats = result.stats || [];
+    for (const stat of stats) {
+      const cell = document.createElement("div");
+      cell.className = "c2m-stat";
+      const label = document.createElement("div");
+      label.className = "c2m-stat-label";
+      label.textContent = stat.label;
+      const value = document.createElement("div");
+      value.className = "c2m-stat-value";
+      value.textContent = String(stat.value);
+      cell.appendChild(label);
+      cell.appendChild(value);
+      UI.resultStats.appendChild(cell);
+    }
+    UI.resultStats.hidden = stats.length === 0;
+
+    const success = result.kind === "success";
+    UI.resultSecondary.textContent = success ? "继续操作" : "返回";
+    UI.resultPrimary.textContent = success ? "完成" : "重试";
+    UI.resultPrimary.focus();
+
+    if (success) notifyUser(result.title || "操作完成", result.message || "");
+  }
+
+  async function runTask(task) {
+    if (taskBusy) return;
+    taskBusy = true;
+    lastTask = task;
+    beginTask(task.title);
+    try {
+      const output = await task.run();
+      showResult(Object.assign({ kind: "success" }, task.success(output)));
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      logMessage(`${task.failTitle}：${message}`);
+      showResult({
+        kind: "error",
+        title: task.failTitle,
+        message,
+        hint: task.failHint || "请检查网络和登录状态后重试。",
+        stats: []
+      });
+    } finally {
+      taskBusy = false;
+    }
+  }
+
+  function handleOverlayKeydown(e) {
+    if (!UI.overlay || UI.overlay.dataset.open !== "true") return;
+    if (e.key === "Escape") {
+      closeModal();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusables = Array.from(
+      UI.card.querySelectorAll('button, input, [href], [tabindex]:not([tabindex="-1"])')
+    ).filter((el) => !el.disabled && el.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
     }
   }
 
@@ -1410,48 +1721,113 @@
     topProgress.id = 'c2m-top-progress';
     document.body.appendChild(topProgress);
 
-    // Centered Modal Dialog (Element UI dialog)
+    // Centered dialog
     const overlay = document.createElement('div');
     overlay.id = 'c2m-modal-overlay';
+    overlay.dataset.open = 'false';
     overlay.innerHTML = `
-      <div id="c2m-modal-card">
+      <div id="c2m-modal-card" role="dialog" aria-modal="true" aria-labelledby="c2m-modal-title">
         <div class="c2m-modal-header">
-          <div class="c2m-modal-title">导出到 Mihon</div>
-          <button type="button" class="c2m-close-btn" id="c2m-close-modal">✕</button>
+          <div>
+            <h2 class="c2m-modal-title" id="c2m-modal-title">Mihon 备份工具</h2>
+            <p class="c2m-modal-subtitle">书架与阅读记录 → Mihon 备份</p>
+          </div>
+          <button type="button" class="c2m-close-btn" id="c2m-close-modal" aria-label="关闭">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
         <div class="c2m-modal-body">
-          <div class="c2m-btn-grid">
-            <button class="c2m-btn c2m-btn-main c2m-btn-full" id="c2m-export-all">
-              导出完整备份 (书架与历史)
-            </button>
-            <button class="c2m-btn c2m-btn-sub" id="c2m-export-subs">仅导出书架</button>
-            <button class="c2m-btn c2m-btn-sub" id="c2m-export-hist">仅导出历史</button>
-            <button class="c2m-btn c2m-btn-emerald c2m-btn-full" id="c2m-merge-btn">
-              合并到本地备份 (.tachibk)
-            </button>
-            <button class="c2m-btn c2m-btn-orange c2m-btn-full" id="c2m-sync-cloud-btn">
-              导入本地备份并批量订阅到拷贝
-            </button>
-          </div>
-          <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
-          <input type="file" id="c2m-sync-file-input" accept=".tachibk" style="display:none;" />
+          <div class="c2m-view" id="c2m-view-idle">
+            <div class="c2m-auth" id="c2m-auth-status" data-state="unknown" role="status">
+              <span class="c2m-auth-dot"></span>
+              <span id="c2m-auth-text">正在检查登录状态…</span>
+            </div>
+            <div class="c2m-alert" id="c2m-auth-error" role="alert" hidden></div>
 
-          <div class="c2m-opt-row">
-            <span>分类名称:</span>
-            <input type="text" class="c2m-text-input" id="c2m-category-input" value="拷贝漫画" />
+            <section class="c2m-section">
+              <div class="c2m-section-head">
+                <span class="c2m-section-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                </span>
+                <div>
+                  <h3 class="c2m-section-title">新建备份</h3>
+                  <p class="c2m-section-desc">从拷贝漫画拉取书架和阅读记录，生成 .tachibk 文件</p>
+                </div>
+              </div>
+              <div class="c2m-section-body">
+                <div class="c2m-actions">
+                  <button type="button" class="c2m-btn c2m-btn-primary" id="c2m-export-all">导出完整备份</button>
+                  <button type="button" class="c2m-btn c2m-btn-ghost" id="c2m-export-subs">仅书架</button>
+                  <button type="button" class="c2m-btn c2m-btn-ghost" id="c2m-export-hist">仅历史</button>
+                </div>
+                <label class="c2m-field" for="c2m-category-input">
+                  <span class="c2m-field-label">分类名称</span>
+                  <input class="c2m-text-input" id="c2m-category-input" type="text" value="拷贝漫画" placeholder="留空则不分类" />
+                </label>
+                <p class="c2m-hint">书架订阅会在 Mihon 中归入这个分类，留空则不分类。</p>
+              </div>
+            </section>
+
+            <section class="c2m-section">
+              <div class="c2m-section-head">
+                <span class="c2m-section-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
+                </span>
+                <div>
+                  <h3 class="c2m-section-title">合并到已有备份</h3>
+                  <p class="c2m-section-desc">保留原有内容，更新拷贝漫画的进度与已读状态，并补入新收藏</p>
+                </div>
+              </div>
+              <div class="c2m-section-body">
+                <button type="button" class="c2m-btn c2m-btn-ghost c2m-btn-block" id="c2m-merge-btn">选择 .tachibk 文件</button>
+              </div>
+            </section>
+
+            <section class="c2m-section">
+              <div class="c2m-section-head">
+                <span class="c2m-section-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 8.5 4.5 4.5 0 0 0 7 17.5"/><path d="M12 12v6"/><path d="M9 15h6"/></svg>
+                </span>
+                <div>
+                  <h3 class="c2m-section-title">批量订阅到拷贝</h3>
+                  <p class="c2m-section-desc">读取备份中的拷贝漫画收藏，把缺少的订阅到云端书架</p>
+                </div>
+              </div>
+              <div class="c2m-section-body">
+                <button type="button" class="c2m-btn c2m-btn-ghost c2m-btn-block" id="c2m-sync-cloud-btn">选择 .tachibk 文件</button>
+              </div>
+            </section>
+
+            <p class="c2m-footnote">文件只在本机生成并下载，不会上传。</p>
           </div>
 
-          <div class="c2m-progress-panel" id="c2m-progress-box">
+          <div class="c2m-view" id="c2m-view-running" hidden>
+            <div class="c2m-run-head">
+              <h3 class="c2m-run-title" id="c2m-run-title">正在处理</h3>
+              <span class="c2m-run-percent" id="c2m-progress-count">0%</span>
+            </div>
             <div class="c2m-meter-bg">
               <div class="c2m-meter-fill" id="c2m-progress-fill"></div>
             </div>
-            <div class="c2m-progress-info">
-              <span id="c2m-progress-msg">准备就绪</span>
-              <span id="c2m-progress-count">0%</span>
+            <p class="c2m-run-step" id="c2m-progress-msg" aria-live="polite">准备中…</p>
+            <div class="c2m-log" id="c2m-log-box"></div>
+            <p class="c2m-run-note">关闭面板不会中断任务。</p>
+          </div>
+
+          <div class="c2m-view c2m-result" id="c2m-view-result" data-kind="success" aria-live="polite" hidden>
+            <div class="c2m-result-icon" id="c2m-result-icon"></div>
+            <h3 class="c2m-result-title" id="c2m-result-title"></h3>
+            <p class="c2m-result-msg" id="c2m-result-msg"></p>
+            <div class="c2m-stats" id="c2m-result-stats"></div>
+            <p class="c2m-result-hint" id="c2m-result-hint"></p>
+            <div class="c2m-result-actions">
+              <button type="button" class="c2m-btn c2m-btn-ghost" id="c2m-result-secondary">返回</button>
+              <button type="button" class="c2m-btn c2m-btn-primary" id="c2m-result-primary">完成</button>
             </div>
           </div>
 
-          <div class="c2m-log-terminal" id="c2m-log-box"></div>
+          <input type="file" id="c2m-file-input" accept=".tachibk" style="display:none;" />
+          <input type="file" id="c2m-sync-file-input" accept=".tachibk" style="display:none;" />
         </div>
       </div>
     `;
@@ -1460,6 +1836,12 @@
     // Cache refs
     UI.topProgress = topProgress;
     UI.overlay = overlay;
+    UI.card = document.getElementById('c2m-modal-card');
+    UI.idleView = document.getElementById('c2m-view-idle');
+    UI.runView = document.getElementById('c2m-view-running');
+    UI.resultView = document.getElementById('c2m-view-result');
+    UI.closeBtn = document.getElementById('c2m-close-modal');
+    UI.runTitle = document.getElementById('c2m-run-title');
     UI.exportAllBtn = document.getElementById('c2m-export-all');
     UI.exportSubsBtn = document.getElementById('c2m-export-subs');
     UI.exportHistBtn = document.getElementById('c2m-export-hist');
@@ -1468,23 +1850,36 @@
     UI.fileInput = document.getElementById('c2m-file-input');
     UI.syncFileInput = document.getElementById('c2m-sync-file-input');
     UI.categoryInput = document.getElementById('c2m-category-input');
-    UI.progressBox = document.getElementById('c2m-progress-box');
+    UI.authStatus = document.getElementById('c2m-auth-status');
+    UI.authText = document.getElementById('c2m-auth-text');
+    UI.authError = document.getElementById('c2m-auth-error');
     UI.progressFill = document.getElementById('c2m-progress-fill');
     UI.progressMsg = document.getElementById('c2m-progress-msg');
     UI.progressCount = document.getElementById('c2m-progress-count');
     UI.logBox = document.getElementById('c2m-log-box');
+    UI.resultIcon = document.getElementById('c2m-result-icon');
+    UI.resultTitle = document.getElementById('c2m-result-title');
+    UI.resultMsg = document.getElementById('c2m-result-msg');
+    UI.resultStats = document.getElementById('c2m-result-stats');
+    UI.resultHint = document.getElementById('c2m-result-hint');
+    UI.resultPrimary = document.getElementById('c2m-result-primary');
+    UI.resultSecondary = document.getElementById('c2m-result-secondary');
 
-    // Event Bindings
+    // Restore default category
+    try {
+      const savedCategory = localStorage.getItem(STORAGE_KEY_CATEGORY);
+      if (savedCategory !== null) UI.categoryInput.value = savedCategory;
+    } catch (_) { }
+    UI.categoryInput.addEventListener('input', () => {
+      try { localStorage.setItem(STORAGE_KEY_CATEGORY, UI.categoryInput.value); } catch (_) { }
+    });
+
+    // Event bindings
     document.getElementById('c2m-close-modal').addEventListener('click', closeModal);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeModal();
     });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && overlay.style.display === 'flex') {
-        closeModal();
-      }
-    });
+    document.addEventListener('keydown', handleOverlayKeydown);
 
     UI.exportAllBtn.addEventListener('click', () => runExportPipeline(true, true));
     UI.exportSubsBtn.addEventListener('click', () => runExportPipeline(true, false));
@@ -1496,7 +1891,17 @@
     UI.syncCloudBtn.addEventListener('click', () => UI.syncFileInput.click());
     UI.syncFileInput.addEventListener('change', handleSyncToCloudFileSelected);
 
-    // Register Native Menu Commands in Tampermonkey
+    UI.resultPrimary.addEventListener('click', () => {
+      if (UI.resultView.dataset.kind === 'success') {
+        closeModal();
+        resetToIdle();
+      } else if (lastTask) {
+        runTask(lastTask);
+      }
+    });
+    UI.resultSecondary.addEventListener('click', () => resetToIdle());
+
+    // Register native menu commands in Tampermonkey
     if (typeof GM_registerMenuCommand === 'function') {
       GM_registerMenuCommand("打开导出面板", openModal);
       GM_registerMenuCommand("导出完整备份", () => { openModal(); runExportPipeline(true, true); });
@@ -1504,77 +1909,39 @@
       GM_registerMenuCommand("导入备份批量订阅到拷贝", () => { openModal(); UI.syncFileInput.click(); });
     }
 
-    // Try injecting native buttons into page navbar and bookshelf
-    injectNativePageButtons();
+    injectEntryPoints();
   }
 
-  // Inject buttons into native CopyManga navbar and personal center
-  function injectNativePageButtons() {
-    // 1. Personal Center Header Banner (https://www.mangacopy.com/web/person/*)
+  // Entry point: personal center header card
+  function injectEntryPoints() {
+    injectPersonalCenterEntry();
+  }
+
+  function injectPersonalCenterEntry() {
     const avatarEl = document.querySelector('header .vavtar, .vavtar, header .el-avatar, .el-avatar--square');
-    if (avatarEl && avatarEl.parentElement) {
-      const infoContainer = avatarEl.parentElement;
-      if (!infoContainer.querySelector('#c2m-person-header-actions')) {
-        // Clean up any stray actions appended elsewhere
-        document.querySelectorAll('#c2m-person-header-actions').forEach(el => el.remove());
+    if (!avatarEl || !avatarEl.parentElement) return;
+    const infoContainer = avatarEl.parentElement;
+    if (infoContainer.querySelector('#c2m-person-header-actions')) return;
+    document.querySelectorAll('#c2m-person-header-actions').forEach((el) => el.remove());
 
-        const actionSection = document.createElement('section');
-        actionSection.id = 'c2m-person-header-actions';
-        actionSection.className = 'c2m-person-header-actions';
+    const actionSection = document.createElement('section');
+    actionSection.id = 'c2m-person-header-actions';
+    actionSection.className = 'c2m-person-header-actions';
 
-        const exportBtn = document.createElement('button');
-        exportBtn.className = 'c2m-person-btn';
-        exportBtn.innerHTML = '导出到 Mihon';
-        exportBtn.title = '导出书架与历史记录至 Mihon 备份';
-        exportBtn.addEventListener('click', openModal);
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.className = 'c2m-person-btn';
+    exportBtn.textContent = '导出到 Mihon';
+    exportBtn.title = '导出书架与阅读记录至 Mihon 备份';
+    exportBtn.addEventListener('click', openModal);
 
-        actionSection.appendChild(exportBtn);
-        infoContainer.appendChild(actionSection);
-      }
-    }
-
-    // 2. Main Site Top Navbar (Home, Comic detail, etc.)
-    const navTargets = [
-      '.nav-list',
-      '.header-content ul',
-      '.navbar-nav',
-      '.header ul',
-      '.user-box',
-      '.header .right',
-      '.header-right',
-      '.nav-content'
-    ];
-
-    let navContainer = null;
-    for (const sel of navTargets) {
-      const el = document.querySelector(sel);
-      if (el) {
-        navContainer = el;
-        break;
-      }
-    }
-
-    if (navContainer && !document.getElementById('c2m-nav-injected-btn')) {
-      const btn = document.createElement('a');
-      btn.id = 'c2m-nav-injected-btn';
-      btn.className = 'c2m-native-nav-btn';
-      btn.href = 'javascript:void(0);';
-      btn.innerHTML = '导出到 Mihon';
-      btn.title = '导出书架与历史记录至 Mihon 备份';
-      btn.addEventListener('click', openModal);
-
-      const li = document.createElement('li');
-      li.id = 'c2m-nav-li';
-      li.style.display = 'inline-flex';
-      li.style.alignItems = 'center';
-      li.appendChild(btn);
-      navContainer.appendChild(li);
-    }
+    actionSection.appendChild(exportBtn);
+    infoContainer.appendChild(actionSection);
   }
 
   function logMessage(msg) {
     if (!UI.logBox) return;
-    UI.logBox.style.display = 'block';
+    UI.logBox.dataset.visible = "true";
     UI.logBox.textContent += msg + '\n';
     UI.logBox.scrollTop = UI.logBox.scrollHeight;
   }
@@ -1588,261 +1955,296 @@
         setTimeout(() => { if (UI.topProgress) UI.topProgress.style.opacity = '0'; }, 800);
       }
     }
-    if (UI.progressBox) UI.progressBox.style.display = 'flex';
     if (UI.progressFill) UI.progressFill.style.width = `${p}%`;
     if (UI.progressMsg) UI.progressMsg.textContent = msg;
     if (UI.progressCount) UI.progressCount.textContent = `${Math.round(p)}%`;
   }
 
   // --- Pipeline Executions ---
-  async function runExportPipeline(includeSubs, includeHist) {
-    const token = detectedToken || detectTokenFromStorage();
-    if (!token) {
-      alert("未检测到登录信息，请先在当前网站登录账号后再导出。");
-      return;
-    }
-
-    const catName = UI.categoryInput?.value || "拷贝漫画";
-    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
-
+  function decodeBackupFile(arrayBuffer) {
     try {
-      let subs = [];
-      let hist = [];
-
-      if (includeSubs) {
-        setProgress("正在获取书架数据...", 10);
-        subs = await fetchAllSubscriptions(token, (cur, total) => {
-          const pct = Math.round((cur / (total || 1)) * 40) + 10;
-          setProgress(`正在获取书架数据 (${cur}/${total})...`, pct);
-        });
-        logMessage(`已获取 ${subs.length} 本书架漫画`);
-      }
-
-      if (includeHist) {
-        setProgress("正在获取历史数据...", 50);
-        hist = await fetchAllReadingHistory(token, (cur, total) => {
-          const pct = Math.round((cur / (total || 1)) * 40) + 50;
-          setProgress(`正在获取历史数据 (${cur}/${total})...`, pct);
-        });
-        logMessage(`已获取 ${hist.length} 条历史记录`);
-      }
-
-      setProgress("正在生成备份文件...", 95);
-      const backup = await convertToMihonBackup(subs, hist, catName);
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-      const filename = `copymanga_backup_${timestamp}.tachibk`;
-      serializeAndDownloadTachibk(backup, filename);
-
-      setProgress("导出完成，正在下载", 100);
-      logMessage(`备份已生成: ${filename} (共 ${backup.backupManga.length} 本)`);
-      notifyUser("Mihon 备份已生成", `${filename} (共 ${backup.backupManga.length} 本)`);
-    } catch (err) {
-      logMessage("导出失败: " + err.message);
-      setProgress("导出失败", 0);
-      notifyUser("导出失败", err.message);
+      const unzippedBytes = window.pako.ungzip(new Uint8Array(arrayBuffer));
+      return initProtobuf().decode(unzippedBytes);
+    } catch (_) {
+      throw new Error("无法解析备份文件，请确认这是 Mihon 导出的 .tachibk 备份。");
     }
+  }
+
+  async function runExportPipeline(includeSubs, includeHist) {
+    const token = ensureToken();
+    if (!token) return;
+
+    const catName = (UI.categoryInput?.value || "").trim();
+    const scope = includeSubs && includeHist ? "完整备份" : (includeSubs ? "书架备份" : "历史备份");
+
+    await runTask({
+      title: `正在导出${scope}`,
+      failTitle: "导出失败",
+      failHint: "请检查网络连接与登录状态后重试。",
+      run: async () => {
+        let subs = [];
+        let hist = [];
+
+        if (includeSubs) {
+          setProgress("正在获取书架数据…", 10);
+          subs = await fetchAllSubscriptions(token, (cur, total) => {
+            const pct = 10 + Math.round((cur / (total || 1)) * (includeHist ? 40 : 80));
+            setProgress(`正在获取书架数据 (${cur}/${total})…`, pct);
+          });
+          logMessage(`已获取 ${subs.length} 本书架漫画`);
+        }
+
+        if (includeHist) {
+          const base = includeSubs ? 50 : 10;
+          setProgress("正在获取历史数据…", base);
+          hist = await fetchAllReadingHistory(token, (cur, total) => {
+            setProgress(`正在获取历史数据 (${cur}/${total})…`, base + Math.round((cur / (total || 1)) * (includeSubs ? 40 : 80)));
+          });
+          logMessage(`已获取 ${hist.length} 条历史记录`);
+        }
+
+        setProgress("正在生成备份文件…", 95);
+        const backup = await convertToMihonBackup(subs, hist, catName);
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+        const filename = `copymanga_backup_${timestamp}.tachibk`;
+        serializeAndDownloadTachibk(backup, filename);
+
+        setProgress("导出完成，正在下载", 100);
+        logMessage(`备份已生成：${filename} (共 ${backup.backupManga.length} 本)`);
+        return { filename, backup, subs: subs.length, hist: hist.length };
+      },
+      success: ({ filename, backup, subs, hist }) => ({
+        title: "备份已生成",
+        message: filename,
+        stats: [
+          { label: "备份漫画", value: backup.backupManga.length },
+          ...(includeSubs ? [{ label: "书架", value: subs }] : []),
+          ...(includeHist ? [{ label: "历史", value: hist }] : [])
+        ],
+        hint: "文件已开始下载。在 Mihon 中打开「设置 → 数据与存储 → 恢复备份」导入。"
+      })
+    });
   }
 
   async function handleMergeFileSelected(e) {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
 
-    const token = detectedToken || detectTokenFromStorage();
-    if (!token) {
-      alert("未检测到登录信息，请先在当前网站登录账号后再导出。");
-      e.target.value = '';
-      return;
-    }
+    const token = ensureToken();
+    if (!token) return;
 
-    const catName = UI.categoryInput?.value || "拷贝漫画";
-    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
+    const catName = (UI.categoryInput?.value || "").trim();
+    const sourceName = file.name.replace(/\.tachibk$/i, '') + '_merged.tachibk';
 
-    try {
-      setProgress("正在读取本地备份...", 10);
-      const arrayBuffer = await file.arrayBuffer();
-      const unzippedBytes = window.pako.ungzip(new Uint8Array(arrayBuffer));
+    await runTask({
+      title: "正在合并备份",
+      failTitle: "合并失败",
+      failHint: "请重新选择文件，确认它是 Mihon 导出的 .tachibk 备份。",
+      run: async () => {
+        setProgress("正在读取本地备份…", 10);
+        const arrayBuffer = await file.arrayBuffer();
+        const existingBackup = decodeBackupFile(arrayBuffer);
+        logMessage(`已读取本地备份（原有 ${existingBackup.backupManga.length} 本漫画）`);
 
-      const Backup = initProtobuf();
-      const existingBackup = Backup.decode(unzippedBytes);
-      logMessage(`已读取本地备份 (原有 ${existingBackup.backupManga.length} 本漫画)`);
+        setProgress("正在获取云端书架数据…", 30);
+        const subs = await fetchAllSubscriptions(token, (cur, total) => {
+          setProgress(`正在获取书架数据 (${cur}/${total})…`, 30 + Math.round((cur / (total || 1)) * 25));
+        });
 
-      setProgress("正在获取云端书架数据...", 30);
-      const subs = await fetchAllSubscriptions(token, (cur, total) => {
-        setProgress(`正在获取书架数据 (${cur}/${total})...`, 30 + Math.round((cur / (total || 1)) * 25));
-      });
+        setProgress("正在获取云端历史数据…", 60);
+        const hist = await fetchAllReadingHistory(token, (cur, total) => {
+          setProgress(`正在获取历史数据 (${cur}/${total})…`, 60 + Math.round((cur / (total || 1)) * 25));
+        });
 
-      setProgress("正在获取云端历史数据...", 60);
-      const hist = await fetchAllReadingHistory(token, (cur, total) => {
-        setProgress(`正在获取历史数据 (${cur}/${total})...`, 60 + Math.round((cur / (total || 1)) * 25));
-      });
+        setProgress("正在合并数据…", 90);
+        const { mergedBackup, stats } = await mergeWithLocalBackup(existingBackup, subs, hist, catName);
 
-      setProgress("正在合并数据...", 90);
-      const { mergedBackup, stats } = await mergeWithLocalBackup(existingBackup, subs, hist, catName);
-
-      const outName = file.name.replace(/\.tachibk$/i, '') + '_merged.tachibk';
-      serializeAndDownloadTachibk(mergedBackup, outName);
-
-      setProgress("合并完成，正在下载", 100);
-      logMessage(`合并完成: ${outName}`);
-      logMessage(`  - 新增漫画: ${stats.new_manga_added} 本`);
-      logMessage(`  - 更新书架: ${stats.updated_favorites} 本`);
-      logMessage(`  - 标记已读: ${stats.chapters_marked_read} 话`);
-      logMessage(`  - 更新历史: ${stats.updated_history} 条`);
-      notifyUser("Mihon 备份合并完成", `${outName}\n新增 ${stats.new_manga_added} 本，标记已读 ${stats.chapters_marked_read} 话`);
-    } catch (err) {
-      logMessage("合并失败: " + err.message);
-      setProgress("合并失败", 0);
-      notifyUser("合并失败", err.message);
-    } finally {
-      e.target.value = '';
-    }
+        serializeAndDownloadTachibk(mergedBackup, sourceName);
+        setProgress("合并完成，正在下载", 100);
+        logMessage(`合并完成：${sourceName}`);
+        logMessage(`  - 新增漫画: ${stats.new_manga_added} 本`);
+        logMessage(`  - 更新书架: ${stats.updated_favorites} 本`);
+        logMessage(`  - 标记已读: ${stats.chapters_marked_read} 话`);
+        logMessage(`  - 更新历史: ${stats.updated_history} 条`);
+        return stats;
+      },
+      success: (stats) => ({
+        title: "合并完成",
+        message: sourceName,
+        stats: [
+          { label: "新增漫画", value: stats.new_manga_added },
+          { label: "更新书架", value: stats.updated_favorites },
+          { label: "标记已读", value: stats.chapters_marked_read },
+          { label: "更新历史", value: stats.updated_history }
+        ],
+        hint: "文件已开始下载。原有漫画的内容、分类与顺序保持不变。"
+      })
+    });
   }
 
   async function handleSyncToCloudFileSelected(e) {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
 
-    const token = detectedToken || detectTokenFromStorage();
-    if (!token) {
-      alert("未检测到登录信息，请先在当前页面登录账号后再操作。");
-      e.target.value = '';
-      return;
-    }
+    const token = ensureToken();
+    if (!token) return;
 
-    if (UI.logBox) { UI.logBox.textContent = ''; UI.logBox.style.display = 'none'; }
+    await runTask({
+      title: "正在批量订阅",
+      failTitle: "批量订阅失败",
+      failHint: "请确认备份文件有效、网络与登录状态正常，然后重试。",
+      run: async () => {
+        setProgress("正在读取本地备份文件…", 5);
+        const arrayBuffer = await file.arrayBuffer();
+        const backupObj = decodeBackupFile(arrayBuffer);
+        logMessage(`已读取本地备份（原有 ${backupObj.backupManga.length} 本漫画）`);
 
-    try {
-      setProgress("正在读取本地备份文件...", 5);
-      const arrayBuffer = await file.arrayBuffer();
-      const unzippedBytes = window.pako.ungzip(new Uint8Array(arrayBuffer));
+        // 1. Filter CopyManga comics (by source ID or /comic/ URL pattern)
+        const targetMangaList = (backupObj.backupManga || []).filter(m => {
+          const isCopySource = String(m.source) === String(DEFAULT_COPYMANGA_SOURCE_ID);
+          const hasCopyUrl = m.url && m.url.includes('/comic/');
+          return (isCopySource || hasCopyUrl) && (m.favorite !== false);
+        });
 
-      const Backup = initProtobuf();
-      const backupObj = Backup.decode(unzippedBytes);
-      logMessage(`已读取本地备份 (原有 ${backupObj.backupManga.length} 本漫画)`);
-
-      // 1. Filter CopyManga comics (by source ID or /comic/ URL pattern)
-      const targetMangaList = (backupObj.backupManga || []).filter(m => {
-        const isCopySource = String(m.source) === String(DEFAULT_COPYMANGA_SOURCE_ID);
-        const hasCopyUrl = m.url && m.url.includes('/comic/');
-        return (isCopySource || hasCopyUrl) && (m.favorite !== false);
-      });
-
-      if (targetMangaList.length === 0) {
-        logMessage("备份文件中未找到属于拷贝漫画的收藏数据。");
-        setProgress("未找到待订阅漫画", 0);
-        return;
-      }
-
-      logMessage(`找到 ${targetMangaList.length} 本拷贝漫画收藏数据`);
-
-      // 2. Fetch current cloud subscriptions to skip already-subscribed comics
-      setProgress("正在获取云端已有书架...", 15);
-      let existingCloudSubs = [];
-      try {
-        existingCloudSubs = await fetchAllSubscriptions(token, () => {});
-      } catch (err) {
-        logMessage(`获取云端已有书架失败: ${err.message}，将直接进行订阅尝试`);
-      }
-
-      const existingPwSet = new Set();
-      for (const item of existingCloudSubs) {
-        const comic = item.comic || item;
-        const pw = (comic.path_word || item.comic_path_word || item.path_word || "").trim().toLowerCase();
-        if (pw) existingPwSet.add(pw);
-      }
-      logMessage(`云端书架已有 ${existingCloudSubs.length} 本漫画`);
-
-      // 3. Extract path_words for all target manga
-      const toSubscribe = [];
-      for (const m of targetMangaList) {
-        const match = (m.url || "").match(/\/comic\/([^/?#]+)/);
-        const pw = match ? match[1].trim() : "";
-        if (!pw) continue;
-        if (existingPwSet.has(pw.toLowerCase())) {
-          continue;
+        if (targetMangaList.length === 0) {
+          logMessage("备份文件中未找到属于拷贝漫画的收藏数据。");
+          return { empty: true, total: 0 };
         }
-        toSubscribe.push({ pw, title: repairMojibake(m.title || pw) });
-      }
 
-      const skippedCount = targetMangaList.length - toSubscribe.length;
-      if (toSubscribe.length === 0) {
-        setProgress("全部漫画已在云端书架", 100);
-        logMessage(`所有 ${targetMangaList.length} 本漫画均已在云端书架，无需重复订阅`);
-        notifyUser("批量订阅完成", `全部 ${targetMangaList.length} 本漫画已在云端书架`);
-        return;
-      }
+        logMessage(`找到 ${targetMangaList.length} 本拷贝漫画收藏数据`);
 
-      logMessage(`需订阅 ${toSubscribe.length} 本新漫画 (跳过已存在 ${skippedCount} 本)`);
-
-      // 4. Batch subscribe loop with concurrency control & real-time progress
-      let successCount = 0;
-      let failCount = 0;
-      const totalToSub = toSubscribe.length;
-
-      for (let i = 0; i < totalToSub; i++) {
-        const item = toSubscribe[i];
-        const pct = 20 + Math.round(((i + 1) / totalToSub) * 75);
-        setProgress(`正在订阅 (${i + 1}/${totalToSub}): ${item.title}...`, pct);
-
+        // 2. Fetch current cloud subscriptions to skip already-subscribed comics
+        setProgress("正在获取云端已有书架…", 15);
+        let existingCloudSubs = [];
         try {
-          // 4a. Fetch comic detail HTML to get UUID / comic_id
-          const htmlResp = await fetch(`/comic/${encodeURIComponent(item.pw)}`, {
-            headers: { 'Accept': 'text/html,application/xhtml+xml' }
-          });
-          if (!htmlResp.ok) {
-            throw new Error(`页面请求失败 (${htmlResp.status})`);
-          }
-          const html = await htmlResp.text();
-
-          // Extract comic_id (36-char uuid)
-          const uuidMatch = html.match(/collect\(\s*['"]([0-9a-fA-F-]{36})['"]\s*\)/) ||
-                            html.match(/["']comic_id["']\s*:\s*["']([0-9a-fA-F-]{36})["']/i) ||
-                            html.match(/data-id=["']([0-9a-fA-F-]{36})["']/i);
-          if (!uuidMatch || !uuidMatch[1]) {
-            throw new Error("未在页面中解析到 comic_id");
-          }
-          const comicId = uuidMatch[1];
-
-          // 4b. Send collect POST request
-          const postResp = await fetch('/api/v2/web/collect', {
-            method: 'POST',
-            headers: {
-              'Authorization': 'Token ' + token,
-              'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-            },
-            body: `comic_id=${encodeURIComponent(comicId)}&is_collect=1`
-          });
-
-          if (!postResp.ok) {
-            throw new Error(`接口报错 (${postResp.status})`);
-          }
-          const postData = await postResp.json();
-          if (postData.code && postData.code !== 200 && postData.code !== 0) {
-            throw new Error(postData.message || `业务码 ${postData.code}`);
-          }
-
-          successCount++;
-          logMessage(`[${i + 1}/${totalToSub}] 成功订阅: ${item.title}`);
+          existingCloudSubs = await fetchAllSubscriptions(token, () => {});
         } catch (err) {
-          failCount++;
-          logMessage(`[${i + 1}/${totalToSub}] 订阅失败: ${item.title} (${err.message})`);
+          logMessage(`获取云端已有书架失败：${err.message}，将直接进行订阅尝试`);
         }
 
-        // Delay between requests
-        await sleep(CONFIG.INTER_REQUEST_DELAY_MS || 200);
-      }
+        const existingPwSet = new Set();
+        for (const item of existingCloudSubs) {
+          const comic = item.comic || item;
+          const pw = (comic.path_word || item.comic_path_word || item.path_word || "").trim().toLowerCase();
+          if (pw) existingPwSet.add(pw);
+        }
+        logMessage(`云端书架已有 ${existingCloudSubs.length} 本漫画`);
 
-      setProgress("批量订阅完成", 100);
-      logMessage(`批量订阅完成: 成功 ${successCount} 本, 失败 ${failCount} 本, 跳过已存在 ${skippedCount} 本`);
-      notifyUser("批量订阅完成", `成功订阅 ${successCount} 本，跳过已存在 ${skippedCount} 本`);
-    } catch (err) {
-      logMessage("操作失败: " + err.message);
-      setProgress("操作失败", 0);
-      notifyUser("批量订阅失败", err.message);
-    } finally {
-      e.target.value = '';
-    }
+        // 3. Extract path_words for all target manga
+        const toSubscribe = [];
+        for (const m of targetMangaList) {
+          const match = (m.url || "").match(/\/comic\/([^/?#]+)/);
+          const pw = match ? match[1].trim() : "";
+          if (!pw) continue;
+          if (existingPwSet.has(pw.toLowerCase())) {
+            continue;
+          }
+          toSubscribe.push({ pw, title: repairMojibake(m.title || pw) });
+        }
+
+        const skippedCount = targetMangaList.length - toSubscribe.length;
+        if (toSubscribe.length === 0) {
+          logMessage(`所有 ${targetMangaList.length} 本漫画均已在云端书架，无需重复订阅`);
+          return { empty: true, total: targetMangaList.length };
+        }
+
+        logMessage(`需订阅 ${toSubscribe.length} 本新漫画（跳过已存在 ${skippedCount} 本）`);
+
+        // 4. Batch subscribe loop with concurrency control & real-time progress
+        let successCount = 0;
+        let failCount = 0;
+        const totalToSub = toSubscribe.length;
+
+        for (let i = 0; i < totalToSub; i++) {
+          const item = toSubscribe[i];
+          const pct = 20 + Math.round(((i + 1) / totalToSub) * 75);
+          setProgress(`正在订阅 (${i + 1}/${totalToSub})：${item.title}…`, pct);
+
+          try {
+            // 4a. Fetch comic detail HTML to get UUID / comic_id
+            const htmlResp = await fetch(`/comic/${encodeURIComponent(item.pw)}`, {
+              headers: { 'Accept': 'text/html,application/xhtml+xml' }
+            });
+            if (!htmlResp.ok) {
+              throw new Error(`页面请求失败 (${htmlResp.status})`);
+            }
+            const html = await htmlResp.text();
+
+            // Extract comic_id (36-char uuid)
+            const uuidMatch = html.match(/collect\(\s*['"]([0-9a-fA-F-]{36})['"]\s*\)/) ||
+                              html.match(/["']comic_id["']\s*:\s*["']([0-9a-fA-F-]{36})["']/i) ||
+                              html.match(/data-id=["']([0-9a-fA-F-]{36})["']/i);
+            if (!uuidMatch || !uuidMatch[1]) {
+              throw new Error("未在页面中解析到 comic_id");
+            }
+            const comicId = uuidMatch[1];
+
+            // 4b. Send collect POST request
+            const postResp = await fetch('/api/v2/web/collect', {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Token ' + token,
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+              },
+              body: `comic_id=${encodeURIComponent(comicId)}&is_collect=1`
+            });
+
+            if (!postResp.ok) {
+              throw new Error(`接口报错 (${postResp.status})`);
+            }
+            const postData = await postResp.json();
+            if (postData.code && postData.code !== 200 && postData.code !== 0) {
+              throw new Error(postData.message || `业务码 ${postData.code}`);
+            }
+
+            successCount++;
+            logMessage(`[${i + 1}/${totalToSub}] 成功订阅：${item.title}`);
+          } catch (err) {
+            failCount++;
+            logMessage(`[${i + 1}/${totalToSub}] 订阅失败：${item.title}（${err.message}）`);
+          }
+
+          // Delay between requests
+          await sleep(CONFIG.INTER_REQUEST_DELAY_MS || 200);
+        }
+
+        setProgress("批量订阅完成", 100);
+        logMessage(`批量订阅完成：成功 ${successCount} 本, 失败 ${failCount} 本, 跳过已存在 ${skippedCount} 本`);
+
+        if (successCount === 0) {
+          throw new Error(`全部 ${failCount} 本订阅失败。`);
+        }
+        return { empty: false, successCount, failCount, skippedCount };
+      },
+      success: (out) => {
+        if (out.empty) {
+          return {
+            title: "无需订阅",
+            message: out.total > 0
+              ? `全部 ${out.total} 本拷贝漫画已在云端书架。`
+              : "备份中没有拷贝漫画的收藏。",
+            hint: out.total > 0 ? "" : "请选择包含拷贝漫画收藏的 Mihon 备份。"
+          };
+        }
+        return {
+          title: out.failCount > 0 ? "订阅完成，部分失败" : "订阅完成",
+          message: out.failCount > 0
+            ? `成功订阅 ${out.successCount} 本，${out.failCount} 本未能订阅。`
+            : `成功订阅 ${out.successCount} 本。`,
+          stats: [
+            { label: "成功订阅", value: out.successCount },
+            { label: "已存在", value: out.skippedCount },
+            { label: "失败", value: out.failCount }
+          ],
+          hint: out.failCount > 0
+            ? "打开拷贝漫画书架确认结果，稍后可重新导入同一备份重试失败的条目。"
+            : "打开拷贝漫画 App 或网页书架即可看到新订阅。"
+        };
+      }
+    });
   }
 
   // --- Initialize ---
@@ -1856,7 +2258,7 @@
     const pollInterval = setInterval(() => {
       pollCount++;
       detectTokenFromStorage();
-      injectNativePageButtons();
+      injectEntryPoints();
       if (pollCount >= 15) clearInterval(pollInterval);
     }, 1000);
 
@@ -1866,7 +2268,7 @@
       if (debounceTimer) return;
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        injectNativePageButtons();
+        injectEntryPoints();
         detectTokenFromStorage();
       }, 200);
     });
