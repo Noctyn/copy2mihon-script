@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         copy2mihon - 拷贝漫画转 Mihon 备份工具
 // @namespace    https://github.com/taffy/copy2mihon
-// @version      0.4.0
+// @version      0.4.1
 // @description  在浏览器中一键导出拷贝漫画书架订阅与阅读历史至 Mihon / Tachiyomi / Komikku 备份 (.tachibk)，支持双向增量合并
 // @author       Taffy
 // @match        *://*.mangacopy.com/*
@@ -42,44 +42,56 @@
     INTER_REQUEST_DELAY_MS: 150,
   };
 
-  // --- Protobuf Schema Definition (Mihon Backup) ---
+  // --- Protobuf Schema Definition (Mihon v0.21.x backup format) ---
+  // Field numbers must match Mihon's Backup* models exactly. Everything is
+  // declared optional so decode -> merge -> encode never trips over fields
+  // omitted by older backups or by Mihon's encodeDefaults=false writer.
   const PROTO_DEFINITION = `
     syntax = "proto2";
 
     message Backup {
       repeated BackupManga backupManga = 1;
       repeated BackupCategory backupCategories = 2;
-      repeated BackupSource backupSources = 102;
+      repeated BackupSource backupSources = 101;
+      repeated BackupPreference backupPreferences = 104;
+      repeated BackupSourcePreferences backupSourcePreferences = 105;
+      repeated BackupExtensionStore backupExtensionStores = 106;
     }
 
     message BackupManga {
-      required int64 source = 1;
-      required string url = 2;
-      optional string title = 3;
+      optional int64 source = 1;
+      optional string url = 2;
+      optional string title = 3 [default = ""];
       optional string artist = 4;
       optional string author = 5;
       optional string description = 6;
       repeated string genre = 7;
-      optional int32 status = 8;
+      optional int32 status = 8 [default = 0];
       optional string thumbnailUrl = 9;
-      optional int64 dateAdded = 13;
-      optional int32 viewer = 14;
+      optional int64 dateAdded = 13 [default = 0];
+      optional int32 viewer = 14 [default = 0];
       repeated BackupChapter chapters = 16;
-      repeated int32 categories = 17;
+      repeated int64 categories = 17;
+      repeated BackupTracking tracking = 18;
       optional bool favorite = 100 [default = true];
-      optional int32 chapterFlags = 101 [default = 513];
-      optional int32 viewer_flags = 103 [default = 0];
+      optional int32 chapterFlags = 101 [default = 0];
+      optional int32 viewerFlags = 103;
       repeated BackupHistory history = 104;
       optional int32 updateStrategy = 105 [default = 0];
+      // Abandoned in Mihon but still written by Komikku; kept as passthrough.
       optional int64 lastModifiedAt = 106;
-      optional bool initialized = 107 [default = true];
-      optional int64 version = 109 [default = 0];
-      repeated bytes memo = 110;
+      optional int64 favoriteModifiedAt = 107;
+      repeated string excludedScanlators = 108;
+      optional int64 version = 109;
+      optional string notes = 110 [default = ""];
+      optional bool initialized = 111 [default = false];
+      optional bytes memo = 112;
+      optional int64 nextUpdate = 113 [default = 0];
     }
 
     message BackupChapter {
-      required string url = 1;
-      required string name = 2;
+      optional string url = 1;
+      optional string name = 2;
       optional string scanlator = 3;
       optional bool read = 4 [default = false];
       optional bool bookmark = 5 [default = false];
@@ -88,27 +100,72 @@
       optional int64 dateUpload = 8 [default = 0];
       optional float chapterNumber = 9 [default = 0];
       optional int64 sourceOrder = 10 [default = 0];
+      // Abandoned in Mihon but still written by Komikku; kept as passthrough.
       optional int64 lastModifiedAt = 11;
-      optional int64 version = 12 [default = 0];
-      repeated bytes memo = 13;
+      optional int64 version = 12;
+      optional bytes memo = 13;
     }
 
     message BackupCategory {
-      required string name = 1;
-      optional int32 order = 2 [default = 0];
-      optional int32 flags = 100 [default = 0];
-      optional int64 id = 101;
+      optional string name = 1;
+      optional int64 order = 2 [default = 0];
+      optional int64 id = 3 [default = 0];
+      optional int64 flags = 100 [default = 0];
     }
 
     message BackupHistory {
-      required string url = 1;
-      required int64 lastRead = 2;
+      optional string url = 1;
+      optional int64 lastRead = 2;
       optional int64 readDuration = 3 [default = 0];
     }
 
     message BackupSource {
       optional string name = 1;
-      required int64 sourceId = 2;
+      optional int64 sourceId = 2;
+    }
+
+    message BackupTracking {
+      optional int32 syncId = 1;
+      optional int64 libraryId = 2;
+      optional int32 mediaIdInt = 3 [default = 0];
+      optional string trackingUrl = 4 [default = ""];
+      optional string title = 5 [default = ""];
+      optional float lastChapterRead = 6 [default = 0];
+      optional int32 totalChapters = 7 [default = 0];
+      optional float score = 8 [default = 0];
+      optional int32 status = 9 [default = 0];
+      optional int64 startedReadingDate = 10 [default = 0];
+      optional int64 finishedReadingDate = 11 [default = 0];
+      optional bool private = 12 [default = false];
+      optional int64 mediaId = 100 [default = 0];
+    }
+
+    message BackupPreference {
+      optional string key = 1;
+      optional PreferenceValue value = 2;
+    }
+
+    // kotlinx.serialization stores the sealed PreferenceValue union as
+    // { type: <subclass name>, truevalue: <encoded value> }.
+    message PreferenceValue {
+      optional string type = 1;
+      optional bytes truevalue = 2;
+    }
+
+    message BackupSourcePreferences {
+      optional string sourceKey = 1;
+      repeated BackupPreference prefs = 2;
+    }
+
+    message BackupExtensionStore {
+      optional string indexUrl = 1;
+      optional string name = 2;
+      optional string badgeLabel = 3;
+      optional string signingKey = 5;
+      optional string contactWebsite = 4;
+      optional string contactDiscord = 6;
+      optional bool isLegacy = 7;
+      optional string extensionListUrl = 8;
     }
   `;
 
@@ -149,11 +206,24 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // Encode "{}" once and reuse the same Uint8Array reference everywhere a
-  // placeholder memo is needed instead of re-running TextEncoder per record.
+  // Empty JsonObject memo ("{}"), reused for every generated record.
   const EMPTY_MEMO_BYTES = new TextEncoder().encode("{}");
-  function memoArray() {
-    return [EMPTY_MEMO_BYTES];
+
+  // protobufjs decodes int64 as Long instances, so numeric fields coming back
+  // from an existing backup need explicit conversion before ===/includes().
+  function toNumber(value) {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === "number") return value;
+    if (typeof value.toNumber === "function") return value.toNumber();
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  // protobufjs shares one default empty array between every decoded message of
+  // a type; arrays that get appended to must be own properties.
+  function ownArray(obj, key) {
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) obj[key] = [];
+    return obj[key];
   }
 
   // --- Token Sniffer / Storage ---
@@ -310,22 +380,59 @@
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // Codepoint mapping for Windows-1252 characters that latin1 cannot encode.
+  const CP1252_REVERSE_MAP = {
+    0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85,
+    0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A,
+    0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
+    0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+    0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B, 0x0153: 0x9C,
+    0x017E: 0x9E, 0x0178: 0x9F
+  };
+  const MOJIBAKE_MARKERS = new Set(
+    ["ç", "¬", "å", "Ã", "Â", "é", "è", "æ", "§", "°", "¶", "·", "ä", "¸", "Š", "œ"]
+  );
+  const MOJIBAKE_REPLACEMENTS = {
+    "ç¬¬": "第",
+    "è©±": "話",
+    "è¯": "话",
+    "å ·": "卷",
+    "å·»": "卷",
+    "å®Œ": "完",
+    "ä¸Š": "上",
+    "ä¸‹": "下",
+    "ä¸": "中",
+    "è¯•çœ‹": "试看"
+  };
+
   function repairMojibake(text) {
     if (!text) return "";
-    const replacements = {
-      "ç¬¬": "第",
-      "è©±": "話",
-      "è¯": "话",
-      "å ·": "卷",
-      "å·»": "卷",
-      "å®Œ": "完",
-      "ä¸Š": "上",
-      "ä¸‹": "下",
-      "ä¸": "中",
-      "è¯•çœ‹": "试看"
-    };
-    let res = text;
-    for (const [k, v] of Object.entries(replacements)) {
+    const value = String(text);
+
+    let hasMarker = false;
+    for (const ch of value) {
+      if (MOJIBAKE_MARKERS.has(ch)) { hasMarker = true; break; }
+    }
+    if (!hasMarker) return value;
+
+    // Rebuild the original bytes, then decode as UTF-8. CopyManga sometimes
+    // returns UTF-8 that was decoded as Latin-1/CP1252, including mixed
+    // strings like "ç¬¬01å\x8D·" where hand-written replacements alone fail.
+    const bytes = [];
+    for (const ch of value) {
+      const code = ch.codePointAt(0);
+      const mapped = code < 256 ? code : CP1252_REVERSE_MAP[code];
+      if (mapped === undefined) { bytes.length = 0; break; }
+      bytes.push(mapped);
+    }
+    if (bytes.length > 0) {
+      try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+      } catch (_) { }
+    }
+
+    let res = value;
+    for (const [k, v] of Object.entries(MOJIBAKE_REPLACEMENTS)) {
       res = res.replaceAll(k, v);
     }
     return res;
@@ -353,23 +460,38 @@
     if (!pw && fallback) {
       pw = await stableFallbackKey(comicData || item);
     }
-    return pw;
+    return pw.toLowerCase();
   }
 
-  function parseDateTimeToMs(dateVal) {
-    if (!dateVal) return Date.now();
-    if (typeof dateVal === 'number') {
+  function parseDateTimeToMs(dateVal, fallback = null) {
+    if (dateVal === null || dateVal === undefined || dateVal === "") return fallback;
+
+    if (typeof dateVal === "number" && isFinite(dateVal)) {
       return dateVal < 100000000000 ? dateVal * 1000 : dateVal;
     }
-    if (typeof dateVal === 'string') {
-      const num = Number(dateVal);
-      if (!isNaN(num)) {
+
+    if (typeof dateVal === "string") {
+      const trimmed = dateVal.trim();
+      if (!trimmed) return fallback;
+
+      if (/^\d+$/.test(trimmed)) {
+        const num = Number(trimmed);
         return num < 100000000000 ? num * 1000 : num;
       }
-      const parsed = Date.parse(dateVal);
+
+      // CopyManga sends naive Beijing time (UTC+8) without an offset.
+      const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+      let isoish = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+      if (!hasZone) {
+        isoish = /^\d{4}-\d{2}-\d{2}$/.test(isoish)
+          ? `${isoish}T00:00:00+08:00`
+          : `${isoish}+08:00`;
+      }
+      const parsed = Date.parse(isoish);
       if (!isNaN(parsed)) return parsed;
     }
-    return Date.now();
+
+    return fallback;
   }
 
   // Prefer an explicit "第X话/回/集" pattern over a bare first-number match,
@@ -405,12 +527,12 @@
       dateAdded,
       favorite,
       initialized: true,
-      chapterFlags: 513,
-      viewer_flags: 0,
+      chapterFlags: 0,
+      viewerFlags: 0,
       categories,
       chapters: [],
       history: [],
-      memo: memoArray()
+      memo: EMPTY_MEMO_BYTES
     };
   }
 
@@ -424,15 +546,63 @@
       dateUpload,
       chapterNumber,
       sourceOrder: 0,
-      memo: memoArray()
+      memo: EMPTY_MEMO_BYTES
     };
+  }
+
+  function statusFromText(text) {
+    const value = String(text || "").trim().toLowerCase();
+    if (!value) return null;
+    if (
+      value.includes("完结") || value.includes("完結") ||
+      ["completed", "complete", "finished", "ended", "end"].includes(value)
+    ) return 2;
+    if (
+      value.includes("连载") || value.includes("連載") ||
+      ["ongoing", "publishing", "serialization", "serializing"].includes(value)
+    ) return 1;
+    return null;
+  }
+
+  // CopyManga v3 returns status as { value, display }; older payloads use a
+  // bare int/string. The display text is the most reliable signal.
+  function normalizeComicStatus(status, statusStr) {
+    if (status && typeof status === "object") {
+      const byDisplay = statusFromText(status.display || status.name);
+      if (byDisplay !== null) return byDisplay;
+      status = status.value !== undefined ? status.value : status.id;
+    }
+
+    if (typeof status === "number" && isFinite(status)) {
+      const num = Math.trunc(status);
+      if (num === 0) return 1;
+      if (num === 1 || num === 2) return 2;
+      return 1;
+    }
+
+    const text = typeof status === "string" ? status.trim() : "";
+    if (/^\d+$/.test(text)) return normalizeComicStatus(Number(text), statusStr);
+    const byText = statusFromText(text);
+    if (byText !== null) return byText;
+    const byStr = statusFromText(statusStr);
+    return byStr !== null ? byStr : 1;
+  }
+
+  function extractAuthor(authorField) {
+    if (!authorField) return "";
+    if (typeof authorField === "string") return repairMojibake(authorField.trim());
+    if (!Array.isArray(authorField)) return "";
+    return authorField
+      .map(a => repairMojibake(typeof a === "string" ? a : (a && a.name) || "").trim())
+      .filter(Boolean)
+      .join(", ");
   }
 
   function deriveComicFields(comic) {
     const title = repairMojibake(comic.name || comic.title || "Unknown");
-    const author = (comic.author || []).map(a => repairMojibake(a.name || a)).join(", ");
+    const author = extractAuthor(comic.author);
     const cover = comic.cover || "";
-    const status = (comic.status === 2 || comic.status === "2" || (comic.status_str || "").includes("完结")) ? 2 : 1;
+    const status = normalizeComicStatus(comic.status, comic.status_str);
     return { title, author, cover, status };
   }
 
@@ -553,7 +723,11 @@
       const url = `/comic/${pw}`;
 
       const { title, author, cover, status } = deriveComicFields(comic);
-      const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
+      const dateAdded = parseDateTimeToMs(
+        item.datetime_modifier || item.datetime_created || item.last_updatetime ||
+        comic.datetime_updated || comic.datetime_created,
+        Date.now()
+      );
 
       mangaByUrl.set(url, makeMangaRecord({
         pw, title, author, cover, status, dateAdded,
@@ -569,16 +743,23 @@
       if (!pw) continue;
       const url = `/comic/${pw}`;
 
-      const chUuid = bItem.chapter_id || bItem.chapter_uuid || (bItem.chapter && (bItem.chapter.uuid || bItem.chapter.id));
-      const chName = repairMojibake(bItem.chapter_name || (bItem.chapter && bItem.chapter.name) || "阅读历史");
-      const readTime = parseDateTimeToMs(bItem.last_read_time || bItem.browse_time || bItem.datetime_updated);
+      const chUuid = bItem.chapter_id || bItem.chapter_uuid || bItem.last_chapter_id ||
+        (bItem.chapter && (bItem.chapter.uuid || bItem.chapter.id));
+      const chName = repairMojibake(
+        bItem.chapter_name || bItem.last_chapter_name || (bItem.chapter && bItem.chapter.name) || "阅读历史"
+      ).trim() || "阅读历史";
+      const readTime = parseDateTimeToMs(
+        bItem.datetime_modifier || bItem.last_read_time || bItem.browse_time ||
+        bItem.datetime_updated || comic.datetime_updated || comic.datetime_created,
+        Date.now()
+      );
       const chUrl = chUuid ? `/comic/${pw}/chapter/${chUuid}` : url;
 
       let manga = mangaByUrl.get(url);
       if (!manga) {
-        const { title, author, cover } = deriveComicFields(comic);
+        const { title, author, cover, status } = deriveComicFields(comic);
         manga = makeMangaRecord({
-          pw, title, author, cover, status: 1, dateAdded: readTime,
+          pw, title, author, cover, status, dateAdded: readTime,
           favorite: false,
           categories: []
         });
@@ -618,19 +799,25 @@
       chapters_marked_read: 0
     };
 
+    const mangaList = ownArray(existingBackup, "backupManga");
+    const categoryList = ownArray(existingBackup, "backupCategories");
+    const sourceList = ownArray(existingBackup, "backupSources");
+
     // 1. Categories
     let targetCatOrder = null;
-    if (categoryName && categoryName.toLowerCase() !== 'none') {
-      const existingCat = existingBackup.backupCategories.find(c => c.name.trim().toLowerCase() === categoryName.trim().toLowerCase());
+    if (categoryName && categoryName.trim().toLowerCase() !== "none") {
+      const wanted = categoryName.trim().toLowerCase();
+      const existingCat = categoryList.find(c => (c.name || "").trim().toLowerCase() === wanted);
       if (existingCat) {
-        targetCatOrder = existingCat.order;
+        targetCatOrder = toNumber(existingCat.order);
       } else {
-        const maxOrder = existingBackup.backupCategories.reduce((max, c) => Math.max(max, c.order || 0), -1);
+        const maxOrder = categoryList.reduce((max, c) => Math.max(max, toNumber(c.order)), -1);
+        const maxId = categoryList.reduce((max, c) => Math.max(max, toNumber(c.id)), 0);
         targetCatOrder = maxOrder + 1;
-        existingBackup.backupCategories.push({
+        categoryList.push({
           name: categoryName.trim(),
           order: targetCatOrder,
-          id: existingBackup.backupCategories.length + 1,
+          id: maxId + 1,
           flags: 0
         });
       }
@@ -638,7 +825,7 @@
 
     // 2. Index existing CopyManga entries by path_word / URL
     const mangaByPathWord = new Map();
-    for (const m of existingBackup.backupManga) {
+    for (const m of mangaList) {
       if (m.title) m.title = repairMojibake(m.title);
       if (m.author) m.author = repairMojibake(m.author);
       for (const ch of (m.chapters || [])) {
@@ -646,8 +833,8 @@
       }
 
       if (String(m.source) === String(DEFAULT_COPYMANGA_SOURCE_ID)) {
-        const match = m.url.match(/\/comic\/([^/?#]+)/);
-        const pw = match ? match[1].toLowerCase() : m.url.toLowerCase();
+        const match = (m.url || "").match(/\/comic\/([^/?#]+)/);
+        const pw = match ? match[1].toLowerCase() : (m.url || "").toLowerCase();
         mangaByPathWord.set(pw, m);
       }
     }
@@ -660,14 +847,29 @@
       if (chapterIndexCache.has(manga)) return chapterIndexCache.get(manga);
       const byUuid = new Map();
       const byNumber = new Map();
+      const add = (map, key, ch) => {
+        const list = map.get(key);
+        if (list) list.push(ch);
+        else map.set(key, [ch]);
+      };
       for (const ch of manga.chapters || []) {
         const uuid = extractChapterUuidFromUrl(ch.url);
-        if (uuid) byUuid.set(uuid, ch);
-        if (!byNumber.has(ch.chapterNumber)) byNumber.set(ch.chapterNumber, ch);
+        if (uuid) add(byUuid, uuid, ch);
+        add(byNumber, ch.chapterNumber, ch);
       }
       const index = { byUuid, byNumber };
       chapterIndexCache.set(manga, index);
       return index;
+    }
+
+    // Legacy backups can contain the same chapter twice, once with a malformed
+    // URL missing the /comic/ prefix. Prefer the canonical row.
+    function preferCanonicalChapters(list) {
+      return list.slice().sort((a, b) => {
+        const aCanon = (a.url || "").startsWith("/comic/") ? 0 : 1;
+        const bCanon = (b.url || "").startsWith("/comic/") ? 0 : 1;
+        return aCanon - bCanon;
+      });
     }
     function invalidateChapterIndex(manga) {
       chapterIndexCache.delete(manga);
@@ -682,24 +884,27 @@
 
       if (mangaByPathWord.has(pwLower)) {
         const m = mangaByPathWord.get(pwLower);
-        if (!m.favorite) {
+        // Mihon omits favorite from the wire when it is true (proto default),
+        // so only an explicit false means "not in library".
+        if (m.favorite === false) {
           m.favorite = true;
           stats.updated_favorites++;
         }
-        if (targetCatOrder !== null && !(m.categories || []).includes(targetCatOrder)) {
-          m.categories = m.categories || [];
-          m.categories.push(targetCatOrder);
-        }
+        // Preserve the user's existing category assignment for manga already in Mihon
       } else {
         const { title, author, cover, status } = deriveComicFields(comic);
-        const dateAdded = parseDateTimeToMs(item.datetime_created || item.last_updatetime);
+        const dateAdded = parseDateTimeToMs(
+          item.datetime_modifier || item.datetime_created || item.last_updatetime ||
+          comic.datetime_updated || comic.datetime_created,
+          Date.now()
+        );
 
         const newManga = makeMangaRecord({
           pw, title, author, cover, status, dateAdded,
           favorite: true,
           categories: targetCatOrder !== null ? [targetCatOrder] : []
         });
-        existingBackup.backupManga.push(newManga);
+        mangaList.push(newManga);
         mangaByPathWord.set(pwLower, newManga);
         stats.new_manga_added++;
       }
@@ -712,62 +917,102 @@
       if (!pw) continue;
       const pwLower = pw.toLowerCase();
 
-      const chUuid = bItem.chapter_id || bItem.chapter_uuid || (bItem.chapter && (bItem.chapter.uuid || bItem.chapter.id));
-      const chName = repairMojibake(bItem.chapter_name || (bItem.chapter && bItem.chapter.name) || "阅读历史");
-      const readTime = parseDateTimeToMs(bItem.last_read_time || bItem.browse_time || bItem.datetime_updated);
+      const chUuid = bItem.chapter_id || bItem.chapter_uuid || bItem.last_chapter_id ||
+        (bItem.chapter && (bItem.chapter.uuid || bItem.chapter.id));
+      const chName = repairMojibake(
+        bItem.chapter_name || bItem.last_chapter_name || (bItem.chapter && bItem.chapter.name) || "阅读历史"
+      ).trim() || "阅读历史";
+      const readTime = parseDateTimeToMs(
+        bItem.datetime_modifier || bItem.last_read_time || bItem.browse_time ||
+        bItem.datetime_updated || comic.datetime_updated || comic.datetime_created
+      );
       const chUrl = chUuid ? `/comic/${pw}/chapter/${chUuid}` : `/comic/${pw}`;
+      const chTime = readTime !== null ? readTime : Date.now();
 
-      if (mangaByPathWord.has(pwLower)) {
-        const m = mangaByPathWord.get(pwLower);
-        stats.updated_history++;
+      let m = mangaByPathWord.get(pwLower);
+      if (!m) {
+        if (!chUuid) continue;
+        const { title, author, cover, status } = deriveComicFields(comic);
+        m = makeMangaRecord({
+          pw, title, author, cover, status, dateAdded: chTime,
+          favorite: false,
+          categories: []
+        });
+        mangaList.push(m);
+        mangaByPathWord.set(pwLower, m);
+        stats.new_manga_added++;
+      }
 
-        if (m.chapters && m.chapters.length > 0) {
-          const { byUuid, byNumber } = getChapterIndex(m);
-          let matchedCh = chUuid ? byUuid.get(chUuid) : null;
-          if (!matchedCh && chName) {
-            const val = parseChapterNumber(chName);
-            matchedCh = byNumber.get(val);
-          }
+      if (!chUuid) continue;
 
-          if (matchedCh) {
-            if (!matchedCh.read) {
-              matchedCh.read = true;
-              stats.chapters_marked_read++;
-            }
-            matchedCh.lastPageRead = 1;
-            const existingHist = (m.history || []).find(h => h.url === matchedCh.url);
-            if (existingHist) {
-              if (readTime > existingHist.lastRead) existingHist.lastRead = readTime;
-            } else {
-              m.history = m.history || [];
-              m.history.push({ url: matchedCh.url, lastRead: readTime, readDuration: 0 });
-            }
-          }
-        } else if (chUuid) {
+      let historyUrl = null;
+      let changed = false;
+      if (m.chapters && m.chapters.length > 0) {
+        const { byUuid, byNumber } = getChapterIndex(m);
+        let targets = byUuid.get(chUuid) || [];
+        if (targets.length === 0 && chName !== "阅读历史") {
           const chNum = parseChapterNumber(chName);
-          m.chapters = [makeChapterRecord({ url: chUrl, name: chName, dateFetch: readTime, dateUpload: readTime, chapterNumber: chNum })];
-          m.history = [{ url: chUrl, lastRead: readTime, readDuration: 0 }];
-          invalidateChapterIndex(m);
+          if (chNum > 0) targets = byNumber.get(chNum) || [];
         }
-      } else {
-        if (chUuid) {
-          const { title, cover } = deriveComicFields(comic);
-          const chNum = parseChapterNumber(chName);
-
-          const newManga = makeMangaRecord({
-            pw, title, author: "", cover, status: 1, dateAdded: readTime,
-            favorite: false,
-            categories: []
-          });
-          newManga.chapters = [makeChapterRecord({ url: chUrl, name: chName, dateFetch: readTime, dateUpload: readTime, chapterNumber: chNum })];
-          newManga.history = [{ url: chUrl, lastRead: readTime, readDuration: 0 }];
-
-          existingBackup.backupManga.push(newManga);
-          mangaByPathWord.set(pwLower, newManga);
-          stats.new_manga_added++;
-          stats.updated_history++;
+        targets = preferCanonicalChapters(targets);
+        if (targets.length > 0) {
+          historyUrl = targets[0].url;
+          let marked = false;
+          for (const targetCh of targets) {
+            if (!targetCh.read) {
+              targetCh.read = true;
+              if (toNumber(targetCh.lastPageRead) === 0) targetCh.lastPageRead = 1;
+              marked = true;
+              changed = true;
+            }
+          }
+          if (marked) stats.chapters_marked_read++;
         }
       }
+
+      // The chapter is missing locally (new chapter, renamed URL, or manga
+      // with no chapters yet): add it instead of dropping the progress.
+      if (!historyUrl) {
+        const chapter = makeChapterRecord({
+          url: chUrl,
+          name: chName,
+          dateFetch: chTime,
+          dateUpload: chTime,
+          chapterNumber: parseChapterNumber(chName)
+        });
+        ownArray(m, "chapters").push(chapter);
+        invalidateChapterIndex(m);
+        historyUrl = chapter.url;
+        stats.chapters_marked_read++;
+        changed = true;
+      }
+
+      if (readTime !== null) {
+        const history = ownArray(m, "history");
+        const historyKey = extractChapterUuidFromUrl(historyUrl);
+        const existingHist = history.find(h =>
+          h.url === historyUrl ||
+          (historyKey && extractChapterUuidFromUrl(h.url) === historyKey)
+        );
+        if (existingHist) {
+          if (readTime > toNumber(existingHist.lastRead)) {
+            existingHist.lastRead = readTime;
+            changed = true;
+          }
+        } else {
+          history.push({ url: historyUrl, lastRead: readTime, readDuration: 0 });
+          changed = true;
+        }
+      }
+      if (changed) stats.updated_history++;
+    }
+
+    // 5. Register the CopyManga source so Mihon can resolve its name.
+    if (!sourceList.some(s => String(s.sourceId) === String(DEFAULT_COPYMANGA_SOURCE_ID))) {
+      sourceList.push({
+        name: DEFAULT_COPYMANGA_SOURCE_NAME,
+        sourceId: getSourceIdLong(DEFAULT_COPYMANGA_SOURCE_ID)
+      });
     }
 
     return { mergedBackup: existingBackup, stats };
@@ -823,6 +1068,9 @@
   }
 
   function serializeAndDownloadTachibk(backupObj, filename) {
+    if (!backupObj.backupManga || backupObj.backupManga.length === 0) {
+      throw new Error("没有可导出的漫画数据。");
+    }
     const Backup = initProtobuf();
     const errMsg = Backup.verify(backupObj);
     if (errMsg) throw new Error("Protobuf 校验失败: " + errMsg);
